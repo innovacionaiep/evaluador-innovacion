@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getConfig } from "@/lib/db";
 import { buildSystemContext } from "@/lib/build-context";
 import { streamChat } from "@/lib/openrouter";
 
@@ -26,6 +27,18 @@ export async function POST(request: Request) {
 
     if (!Number.isInteger(evaluationTypeId) || evaluationTypeId < 1) {
       return NextResponse.json({ error: "evaluationTypeId required" }, { status: 400 });
+    }
+
+    const config = await getConfig(evaluationTypeId);
+    const hasRubric = !!((config?.rubric_prompt ?? "").trim());
+    if (!config || !hasRubric) {
+      return NextResponse.json(
+        {
+          error: "no_rubric",
+          message: "No hay rúbrica configurada. Configure una rúbrica en Configuración (campo Rúbrica) antes de evaluar.",
+        },
+        { status: 400 }
+      );
     }
 
     const systemContent = await buildSystemContext(evaluationTypeId, projectFilePaths, {

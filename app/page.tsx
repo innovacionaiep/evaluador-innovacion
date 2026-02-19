@@ -44,8 +44,9 @@ export default function Home() {
   const [reportTitle, setReportTitle] = useState("TITULO DEL INFORME DE EVALUACIÓN");
   const [projectFilePaths, setProjectFilePaths] = useState<string[]>([]);
   const [extractedProjectText, setExtractedProjectText] = useState("");
-  const [extractedProjectTable, setExtractedProjectTable] = useState<{ element: string; content: string }[]>([]);
+  const [extractedProjectTable, setExtractedProjectTable] = useState<{ section?: string; element: string; content: string }[]>([]);
   const [extractedProjectLoading, setExtractedProjectLoading] = useState(false);
+  const [elementsWithSection, setElementsWithSection] = useState<{ title: string; section: string }[]>([]);
   const [projectSectionOpen, setProjectSectionOpen] = useState(true);
   const [fullscreenSection, setFullscreenSection] = useState<"project" | "report" | null>(null);
 
@@ -67,105 +68,173 @@ export default function Home() {
   }, [activeTypeId, evaluationTypes]);
 
   useEffect(() => {
+    if (!activeTypeId) {
+      setElementsWithSection([]);
+      return;
+    }
+    fetch(`/api/config/${activeTypeId}`)
+      .then((r) => r.json())
+      .then((data) => {
+        const elements = Array.isArray(data.elements) ? data.elements : [];
+        const mapped = elements
+          .filter((e: unknown) => typeof e === "object" && e != null && "title" in e)
+          .map((e: { title?: string; section?: string }) => ({
+            title: String((e as { title: string }).title ?? "").trim(),
+            section: typeof (e as { section?: string }).section === "string" ? ((e as { section: string }).section ?? "General").trim() : "General",
+          }))
+          .filter((e) => e.title);
+        setElementsWithSection(mapped);
+      })
+      .catch(() => setElementsWithSection([]));
+  }, [activeTypeId]);
+
+  const MAX_EXTRACT_RETRIES = 5;
+  const EXTRACT_RETRY_DELAY_MS = 3000;
+
+  useEffect(() => {
     if (projectFilePaths.length === 0) {
       setExtractedProjectText("");
       setExtractedProjectTable([]);
       setExtractedProjectLoading(false);
       return;
     }
-    setExtractedProjectLoading(true);
-    setMessages((prev) => [...prev, { role: "assistant", content: "Extrayendo información…" }]);
-    setMessages((prev) => [...prev, { role: "assistant", content: "Detectando y organizando…" }]);
 
-    const abortController = new AbortController();
-    fetch("/api/project-extract", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        projectFilePaths,
-        evaluationTypeId: activeTypeId ?? undefined,
-        stream: true,
-      }),
-      signal: abortController.signal,
-    })
-      .then(async (res) => {
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data?.error || res.statusText);
-        }
-        const reader = res.body?.getReader();
-        if (!reader) throw new Error("No response body");
-        const decoder = new TextDecoder();
-        let buffer = "";
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
+    let cancelled = false;
+    let currentController: AbortController | null = null;
+
+    const doFetch = (attempt: number) => {
+      if (cancelled) return;
+      currentController = new AbortController();
+      fetch("/api/project-extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectFilePaths,
+          evaluationTypeId: activeTypeId ?? undefined,
+          stream: true,
+        }),
+        signal: currentController.signal,
+      })
+        .then(async (res) => {
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data?.error || res.statusText);
+          }
+          const reader = res.body?.getReader();
+          if (!reader) throw new Error("No response body");
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed) continue;
+              try {
+                const data = JSON.parse(trimmed) as {
+                  type: string;
+                  name?: string;
+                  text?: string;
+                  error?: string;
+                  elementsTable?: { element: string; content: string }[];
+                };
+                if (data.type === "element" && typeof data.name === "string") {
+                  setMessages((prev) => {
+                    const next = [...prev];
+                    const last = next[next.length - 1];
+                    if (last?.role === "assistant" && last.content.startsWith("Detectando")) {
+                      const sep = last.content.endsWith("…") ? "\n\n" : "\n";
+                      next[next.length - 1] = { ...last, content: last.content + sep + data.name + " ✓" };
+                    }
+                    return next;
+                  });
+                } else if (data.type === "done") {
+                  const text = typeof data.text === "string" ? data.text : "";
+                  const table = Array.isArray(data.elementsTable)
+                    ? (data.elementsTable as { section?: string; element: string; content: string }[]).map((r) => ({
+                        section: r.section,
+                        element: r.element,
+                        content: r.content,
+                      }))
+                    : [];
+                  setExtractedProjectText(text);
+                  setExtractedProjectTable(table);
+                  setMessages((prev) => [...prev, { role: "assistant", content: "Extracción completada." }]);
+                  setExtractedProjectLoading(false);
+                } else if (data.type === "error" && data.error) {
+                  throw new Error(data.error);
+                }
+              } catch (e) {
+                if (e instanceof SyntaxError) continue;
+                throw e;
+              }
+            }
+          }
+          if (buffer.trim()) {
             try {
-              const data = JSON.parse(trimmed) as {
+              const data = JSON.parse(buffer.trim()) as {
                 type: string;
-                name?: string;
                 text?: string;
                 error?: string;
                 elementsTable?: { element: string; content: string }[];
               };
-              if (data.type === "element" && typeof data.name === "string") {
-                setMessages((prev) => {
-                  const next = [...prev];
-                  const last = next[next.length - 1];
-                  if (last?.role === "assistant" && last.content.startsWith("Detectando")) {
-                    const sep = last.content.endsWith("…") ? "\n\n" : "\n";
-                    next[next.length - 1] = { ...last, content: last.content + sep + data.name + " ✓" };
-                  }
-                  return next;
-                });
-              } else if (data.type === "done") {
-                const text = typeof data.text === "string" ? data.text : "";
-                const table = Array.isArray(data.elementsTable) ? data.elementsTable : [];
-                setExtractedProjectText(text);
+              if (data.type === "done") {
+                setExtractedProjectText(typeof data.text === "string" ? data.text : "");
+                const table = Array.isArray(data.elementsTable)
+                  ? (data.elementsTable as { section?: string; element: string; content: string }[]).map((r) => ({
+                      section: r.section,
+                      element: r.element,
+                      content: r.content,
+                    }))
+                  : [];
                 setExtractedProjectTable(table);
-              } else if (data.type === "error" && data.error) {
-                throw new Error(data.error);
+                setMessages((prev) => [...prev, { role: "assistant", content: "Extracción completada." }]);
+                setExtractedProjectLoading(false);
               }
+              if (data.type === "error" && data.error) throw new Error(data.error);
             } catch (e) {
-              if (e instanceof SyntaxError) continue;
-              throw e;
+              if (!(e instanceof SyntaxError)) throw e;
             }
           }
-        }
-        if (buffer.trim()) {
-          try {
-            const data = JSON.parse(buffer.trim()) as {
-              type: string;
-              text?: string;
-              error?: string;
-              elementsTable?: { element: string; content: string }[];
-            };
-            if (data.type === "done") {
-              setExtractedProjectText(typeof data.text === "string" ? data.text : "");
-              setExtractedProjectTable(Array.isArray(data.elementsTable) ? data.elementsTable : []);
-            }
-            if (data.type === "error" && data.error) throw new Error(data.error);
-          } catch (e) {
-            if (!(e instanceof SyntaxError)) throw e;
+        })
+        .catch((err) => {
+          setExtractedProjectText("");
+          setExtractedProjectTable([]);
+          const msg = err?.message?.includes("429")
+            ? "Extracción fallida: límite de uso temporal. Reintente en unos momentos."
+            : "Extracción fallida.";
+          setMessages((prev) => [...prev, { role: "assistant", content: msg }]);
+          if (
+            attempt < MAX_EXTRACT_RETRIES - 1 &&
+            err?.message?.includes("429") &&
+            !cancelled
+          ) {
+            setTimeout(() => {
+              if (cancelled) return;
+              setMessages((prev) => [
+                ...prev,
+                { role: "assistant", content: `Reintentando extracción (intento ${attempt + 2}/${MAX_EXTRACT_RETRIES})…` },
+              ]);
+              doFetch(attempt + 1);
+            }, EXTRACT_RETRY_DELAY_MS);
+          } else {
+            setExtractedProjectLoading(false);
           }
-        }
-      })
-      .catch(() => {
-        setExtractedProjectText("");
-        setExtractedProjectTable([]);
-      })
-      .finally(() => {
-        setMessages((prev) => [...prev, { role: "assistant", content: "Extracción completada." }]);
-        setExtractedProjectLoading(false);
-      });
+        });
+    };
 
-    return () => abortController.abort();
+    setExtractedProjectLoading(true);
+    setMessages((prev) => [...prev, { role: "assistant", content: "Extrayendo información…" }]);
+    setMessages((prev) => [...prev, { role: "assistant", content: "Detectando y organizando…" }]);
+    doFetch(0);
+
+    return () => {
+      cancelled = true;
+      currentController?.abort();
+    };
   }, [projectFilePaths, activeTypeId]);
 
   return (
@@ -188,6 +257,7 @@ export default function Home() {
             onProjectFilePathsChange={setProjectFilePaths}
             projectElementsTable={extractedProjectTable}
             sessionId={SESSION_ID}
+            extractionLoading={extractedProjectLoading}
           />
         </div>
         <div className="flex min-w-0 flex-1 flex-col">
@@ -221,11 +291,44 @@ export default function Home() {
                   {extractedProjectLoading
                     ? "Extrayendo con IA…"
                     : (() => {
-                        const rows =
+                        const getSectionForElement = (elementName: string) => {
+                          const found = elementsWithSection.find((e) => e.title === elementName.trim());
+                          return found?.section ?? "—";
+                        };
+                        const rawRows: { section: string; element: string; content: string }[] =
                           extractedProjectTable.length > 0
-                            ? extractedProjectTable.map((r) => [r.element, r.content] as [string, string])
-                            : parseElementoContenido(extractedProjectText?.trim() || "");
-                        if (rows.length === 0) {
+                            ? extractedProjectTable.map((r) => ({
+                                section: r.section ?? getSectionForElement(r.element),
+                                element: r.element,
+                                content: r.content,
+                              }))
+                            : parseElementoContenido(extractedProjectText?.trim() || "").map(([elem, cont]) => ({
+                                section: getSectionForElement(elem),
+                                element: elem,
+                                content: cont,
+                              }));
+                        // Ordenar por sección (orden de primera aparición) y luego por elemento dentro de cada sección (como en Config)
+                        const sectionOrder: string[] = [];
+                        for (const e of elementsWithSection) {
+                          if (!sectionOrder.includes(e.section)) sectionOrder.push(e.section);
+                        }
+                        const titleOrder: string[] = [];
+                        for (const sec of sectionOrder) {
+                          for (const e of elementsWithSection) {
+                            if (e.section === sec) titleOrder.push(e.title);
+                          }
+                        }
+                        const rowsOrdered: { section: string; element: string; content: string }[] = [];
+                        for (const title of titleOrder) {
+                          const row = rawRows.find((r) => r.element.trim() === title);
+                          if (row) rowsOrdered.push(row);
+                        }
+                        const used = new Set(rowsOrdered.map((r) => r.element));
+                        for (const row of rawRows) {
+                          if (!used.has(row.element)) rowsOrdered.push(row);
+                        }
+                        const rowsWithSection = rowsOrdered;
+                        if (rowsWithSection.length === 0) {
                           const t = extractedProjectText?.trim() || "";
                           if (!t) return "Sube archivos del proyecto para ver aquí el texto extraído.";
                           return <pre className="whitespace-pre-wrap font-sans">{t}</pre>;
@@ -234,15 +337,17 @@ export default function Home() {
                           <table className="w-full border-collapse border border-gray-300 dark:border-gray-600">
                             <thead>
                               <tr className="bg-gray-100 dark:bg-gray-800">
+                                <th className="border border-gray-300 px-3 py-2 text-left font-semibold dark:border-gray-600">Sección</th>
                                 <th className="border border-gray-300 px-3 py-2 text-left font-semibold dark:border-gray-600">Elemento</th>
                                 <th className="border border-gray-300 px-3 py-2 text-left font-semibold dark:border-gray-600">Contenido</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {rows.map(([elem, cont], i) => (
+                              {rowsWithSection.map((row, i) => (
                                 <tr key={i} className="border-b border-gray-200 dark:border-gray-700">
-                                  <td className="border border-gray-300 px-3 py-2 align-top dark:border-gray-600">{elem}</td>
-                                  <td className="border border-gray-300 px-3 py-2 align-top dark:border-gray-600 whitespace-pre-wrap">{cont}</td>
+                                  <td className="border border-gray-300 px-3 py-2 align-top dark:border-gray-600">{row.section}</td>
+                                  <td className="border border-gray-300 px-3 py-2 align-top dark:border-gray-600">{row.element}</td>
+                                  <td className="border border-gray-300 px-3 py-2 align-top dark:border-gray-600 whitespace-pre-wrap">{row.content}</td>
                                 </tr>
                               ))}
                             </tbody>
@@ -276,11 +381,43 @@ export default function Home() {
             {extractedProjectLoading
               ? "Extrayendo con IA…"
               : (() => {
-                  const rows =
+                  const getSectionForElement = (elementName: string) => {
+                    const found = elementsWithSection.find((e) => e.title === elementName.trim());
+                    return found?.section ?? "—";
+                  };
+                  const rawRows: { section: string; element: string; content: string }[] =
                     extractedProjectTable.length > 0
-                      ? extractedProjectTable.map((r) => [r.element, r.content] as [string, string])
-                      : parseElementoContenido(extractedProjectText?.trim() || "");
-                  if (rows.length === 0) {
+                      ? extractedProjectTable.map((r) => ({
+                          section: r.section ?? getSectionForElement(r.element),
+                          element: r.element,
+                          content: r.content,
+                        }))
+                      : parseElementoContenido(extractedProjectText?.trim() || "").map(([elem, cont]) => ({
+                          section: getSectionForElement(elem),
+                          element: elem,
+                          content: cont,
+                        }));
+                  const sectionOrder: string[] = [];
+                  for (const e of elementsWithSection) {
+                    if (!sectionOrder.includes(e.section)) sectionOrder.push(e.section);
+                  }
+                  const titleOrder: string[] = [];
+                  for (const sec of sectionOrder) {
+                    for (const e of elementsWithSection) {
+                      if (e.section === sec) titleOrder.push(e.title);
+                    }
+                  }
+                  const rowsOrdered: { section: string; element: string; content: string }[] = [];
+                  for (const title of titleOrder) {
+                    const row = rawRows.find((r) => r.element.trim() === title);
+                    if (row) rowsOrdered.push(row);
+                  }
+                  const used = new Set(rowsOrdered.map((r) => r.element));
+                  for (const row of rawRows) {
+                    if (!used.has(row.element)) rowsOrdered.push(row);
+                  }
+                  const rowsWithSection = rowsOrdered;
+                  if (rowsWithSection.length === 0) {
                     const t = extractedProjectText?.trim() || "";
                     if (!t) return "Sube archivos del proyecto para ver aquí el texto extraído.";
                     return <pre className="whitespace-pre-wrap font-sans">{t}</pre>;
@@ -289,15 +426,17 @@ export default function Home() {
                     <table className="w-full border-collapse border border-gray-300 dark:border-gray-600">
                       <thead>
                         <tr className="bg-gray-100 dark:bg-gray-800">
+                          <th className="border border-gray-300 px-3 py-2 text-left font-semibold dark:border-gray-600">Sección</th>
                           <th className="border border-gray-300 px-3 py-2 text-left font-semibold dark:border-gray-600">Elemento</th>
                           <th className="border border-gray-300 px-3 py-2 text-left font-semibold dark:border-gray-600">Contenido</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {rows.map(([elem, cont], i) => (
+                        {rowsWithSection.map((row, i) => (
                           <tr key={i} className="border-b border-gray-200 dark:border-gray-700">
-                            <td className="border border-gray-300 px-3 py-2 align-top dark:border-gray-600">{elem}</td>
-                            <td className="border border-gray-300 px-3 py-2 align-top dark:border-gray-600 whitespace-pre-wrap">{cont}</td>
+                            <td className="border border-gray-300 px-3 py-2 align-top dark:border-gray-600">{row.section}</td>
+                            <td className="border border-gray-300 px-3 py-2 align-top dark:border-gray-600">{row.element}</td>
+                            <td className="border border-gray-300 px-3 py-2 align-top dark:border-gray-600 whitespace-pre-wrap">{row.content}</td>
                           </tr>
                         ))}
                       </tbody>

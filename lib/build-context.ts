@@ -1,5 +1,4 @@
 import { getConfig } from "@/lib/db";
-import { getRubricFilePath } from "@/lib/storage";
 import { extractTextFromFile } from "@/lib/document-parser";
 import { getKnowledgeDocuments } from "@/lib/knowledge-loader";
 import { hasChunks } from "@/lib/vector-store";
@@ -32,6 +31,8 @@ const RAG_MAX_RETRIEVED_CHARS = 18_000;
 
 export type BuildSystemContextOptions = {
   projectElementsTable?: { element: string; content: string }[];
+  /** Si true, no se incluye la documentación de referencia (Knowledge). Útil en el chat cuando instrucciones y rúbrica están vacías para que el LLM no cite el manual como si fuera la configuración. */
+  skipKnowledge?: boolean;
 };
 
 export async function buildSystemContext(
@@ -47,11 +48,60 @@ export async function buildSystemContext(
   const instructions = (config.instructions ?? "").trim();
   const promptLegacy = (config.prompt ?? "").trim();
   const promptForInstructions = instructions || promptLegacy;
+  const reportFormat = (config.report_format ?? "").trim();
+  const rubricText = (config.rubric_prompt ?? "").trim();
+
+  // Configuración actual: para que el chat responda según lo realmente configurado (instrucciones, formato, elementos).
+  const elementsRaw = config.elements ?? "[]";
+  let elementsList: { title?: string; description?: string; section?: string }[] = [];
+  try {
+    elementsList = JSON.parse(elementsRaw) as { title?: string; description?: string; section?: string }[];
+    if (!Array.isArray(elementsList)) elementsList = [];
+  } catch {
+    elementsList = [];
+  }
+  const elementsBySection = elementsList.reduce(
+    (acc, el) => {
+      const section = (el.section ?? "General").trim() || "General";
+      if (!acc[section]) acc[section] = [];
+      acc[section].push({ title: el.title ?? "", description: el.description ?? "" });
+      return acc;
+    },
+    {} as Record<string, { title: string; description: string }[]>
+  );
+  const elementsConfigText =
+    Object.keys(elementsBySection).length === 0
+      ? "Ninguno configurado."
+      : Object.entries(elementsBySection)
+          .map(
+            ([sec, items]) =>
+              `**${sec}:**\n` +
+              items.map((e) => `- ${e.title || "(sin nombre)"}${e.description ? `: ${e.description}` : ""}`).join("\n")
+          )
+          .join("\n\n");
+
+  const configSummary = [
+    "**Instrucciones de evaluación:**",
+    promptForInstructions ? promptForInstructions : "Vacío. No hay instrucciones configuradas para este tipo de evaluación.",
+    "",
+    "**Formato del informe:**",
+    reportFormat ? reportFormat : "Vacío. No hay formato de informe configurado.",
+    "",
+    "**Rúbrica:**",
+    rubricText ? "Configurada (ver sección 'Rúbrica y criterios de evaluación' más abajo)." : "No configurada.",
+    "",
+    "**Elementos a identificar en el proyecto** (lo que se extrae y se muestra en 'Proyecto extraído'):",
+    elementsConfigText,
+    "",
+    "REGLA: Si el usuario pregunta por las instrucciones, el formato del informe o los elementos a identificar, responde ÚNICAMENTE con lo indicado en esta sección. No confundas instrucciones con rúbrica. No inventes pasos, secciones (A,B,C,D), subdimensiones ni criterios a partir del manual de referencia.",
+  ].join("\n");
+
+  parts.push("## Configuración actual de este tipo de evaluación\n\n" + configSummary);
+
   if (promptForInstructions) {
     parts.push("## Instrucciones de evaluación\n\n" + promptForInstructions);
   }
 
-  const reportFormat = (config.report_format ?? "").trim();
   if (reportFormat) {
     parts.push("## Formato del informe\n\n" + reportFormat);
   }
@@ -83,41 +133,19 @@ export async function buildSystemContext(
     }
   }
 
-  let rubricText = (config.rubric_prompt ?? "").trim();
-  if (!rubricText) {
-    const rubricPath = (config.rubric_path || "").trim();
-    if (rubricPath) {
-      if (rubricPath.startsWith("http://") || rubricPath.startsWith("https://")) {
-        try {
-          const res = await fetch(rubricPath);
-          if (res.ok) {
-            const buf = Buffer.from(await res.arrayBuffer());
-            const ext = path.extname(new URL(rubricPath).pathname) || ".bin";
-            const tmpPath = path.join(os.tmpdir(), `rubric-${Date.now()}${ext}`);
-            fs.writeFileSync(tmpPath, buf);
-            try {
-              rubricText = (await extractTextFromFile(tmpPath))?.trim() ?? "";
-            } finally {
-              try {
-                fs.unlinkSync(tmpPath);
-              } catch {
-                /* ignore */
-              }
-            }
-          }
-        } catch {
-          /* ignore */
-        }
-      } else {
-        const fullPath = getRubricFilePath(evaluationTypeId, rubricPath);
-        if (fs.existsSync(fullPath)) {
-          rubricText = (await extractTextFromFile(fullPath))?.trim() ?? "";
-        }
-      }
-    }
-  }
+  // Solo usar rúbrica si el usuario escribió algo en el campo "Rúbrica". No cargar desde
+  // rubric_path cuando el campo está vacío, para no inyectar rúbricas residuales.
+  // Cuando no hay rúbrica configurada, indicarlo explícitamente para que el modelo no
+  // use la documentación de referencia como rúbrica ni invente criterios.
+  const rubricSectionText = rubricText
+    ? rubricText
+    : `No hay rúbrica de evaluación configurada para este tipo de evaluación.
 
-  if (hasChunks(evaluationTypeId)) {
+REGLA para preguntas sobre rúbrica o criterios: Responde únicamente que no hay rúbrica definida en la configuración actual. No describas ni sugieras ninguna estructura de evaluación (no menciones dimensiones como Novedad, Impacto, Escalabilidad, Resultado Final, ni niveles 1-4, ni subdimensiones, ni ponderaciones). No pidas al usuario que proporcione o cargue una rúbrica. No uses la documentación de referencia como rúbrica. En las evaluaciones no se aplica ninguna rúbrica si no está configurada.`;
+
+  const skipKnowledge = options?.skipKnowledge === true;
+
+  if (!skipKnowledge && hasChunks(evaluationTypeId)) {
     try {
       const queryText = [
         promptForInstructions.slice(0, RAG_QUERY_PROMPT_CHARS),
@@ -144,7 +172,7 @@ export async function buildSystemContext(
     }
   }
 
-  if (!parts.some((p) => p.startsWith("## Documentación de referencia"))) {
+  if (!skipKnowledge && !parts.some((p) => p.startsWith("## Documentación de referencia"))) {
     const docs = await getKnowledgeDocuments(evaluationTypeId);
     if (docs.length > 0) {
       const knowledgeTexts = docs.map((d) => `### Documento: ${d.docName}\n\n${d.text}`);
@@ -152,9 +180,7 @@ export async function buildSystemContext(
     }
   }
 
-  if (rubricText) {
-    parts.push("## Rúbrica y criterios de evaluación\n\n" + rubricText);
-  }
+  parts.push("## Rúbrica y criterios de evaluación\n\n" + rubricSectionText);
 
   const separator = "\n\n---\n\n";
   const promptPart = parts.find((p) => p.startsWith("## Instrucciones de evaluación"));

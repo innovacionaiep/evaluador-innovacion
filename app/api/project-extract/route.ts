@@ -34,10 +34,10 @@ Tu tarea: para cada elemento de la lista, localiza en el JSON el contenido que m
 Formato de respuesta (solo este JSON, sin markdown ni texto adicional):
 [{"element":"Nombre del elemento","content":"texto encontrado"},...]`;
 
-type ElementDef = { title: string; description: string };
-type ElementRow = { element: string; content: string };
+type ElementDef = { title: string; description: string; section?: string };
+type ElementRow = { section: string; element: string; content: string };
 
-function parseElementsTableFromLLM(raw: string): ElementRow[] {
+function parseElementsTableFromLLM(raw: string): Omit<ElementRow, "section">[] {
   const trimmed = raw.trim();
   const jsonMatch = trimmed.match(/\[[\s\S]*\]/);
   if (!jsonMatch) return [];
@@ -45,11 +45,27 @@ function parseElementsTableFromLLM(raw: string): ElementRow[] {
     const arr = JSON.parse(jsonMatch[0]) as unknown[];
     if (!Array.isArray(arr)) return [];
     return arr
-      .filter((x): x is ElementRow => typeof x === "object" && x != null && "element" in x && "content" in x)
+      .filter((x): x is { element: string; content: string } => typeof x === "object" && x != null && "element" in x && "content" in x)
       .map((x) => ({ element: String(x.element), content: String(x.content ?? "") }));
   } catch {
     return [];
   }
+}
+
+function addSectionsToTable(
+  rows: Omit<ElementRow, "section">[],
+  configElements: ElementDef[]
+): ElementRow[] {
+  const titleToSection = new Map<string, string>();
+  for (const e of configElements) {
+    const t = (e.title ?? "").trim();
+    if (t) titleToSection.set(t, (e.section ?? "General").trim() || "General");
+  }
+  return rows.map((r) => ({
+    section: titleToSection.get(r.element.trim()) ?? "General",
+    element: r.element,
+    content: r.content,
+  }));
 }
 
 function formatElementsTableAsText(table: ElementRow[]): string {
@@ -123,6 +139,7 @@ export async function POST(request: Request) {
             const parsed = JSON.parse(raw) as unknown[];
             configElements = Array.isArray(parsed)
               ? parsed.filter((e): e is ElementDef => typeof e === "object" && e != null && "title" in e && "description" in e)
+              .map((e) => ({ ...e, section: typeof (e as ElementDef).section === "string" ? (e as ElementDef).section : "General" }))
               : [];
           } catch {
             configElements = [];
@@ -144,7 +161,8 @@ export async function POST(request: Request) {
           ],
           { max_tokens: 8192 }
         );
-        elementsTable = parseElementsTableFromLLM(llmResponse?.trim() ?? "[]");
+        const rawTable = parseElementsTableFromLLM(llmResponse?.trim() ?? "[]");
+        elementsTable = addSectionsToTable(rawTable, configElements);
       }
       const text = elementsTable.length > 0 ? formatElementsTableAsText(elementsTable) : "";
 

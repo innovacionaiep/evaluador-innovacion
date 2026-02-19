@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { ExpandIcon } from "@/components/FullscreenOverlay";
 
 type EvaluationType = { id: number; name: string };
 type KnowledgeItem = string | { name: string; url: string };
@@ -48,6 +49,21 @@ export default function ConfigPanel({
   const [showElementModal, setShowElementModal] = useState(false);
   const [editingElementIndex, setEditingElementIndex] = useState<number | null>(null);
   const [elementForm, setElementForm] = useState({ title: "", description: "", section: "General" });
+  type ExpandSectionId = "elements" | "rubric" | "instructions" | "reportFormat";
+  const [expandSection, setExpandSection] = useState<ExpandSectionId | null>(null);
+
+  useEffect(() => {
+    if (!expandSection) return;
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setExpandSection(null);
+    };
+    window.addEventListener("keydown", handleEscape);
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", handleEscape);
+      document.body.style.overflow = "";
+    };
+  }, [expandSection]);
 
   useEffect(() => {
     if (isOpen && activeId) setSelectedTypeId(activeId);
@@ -223,6 +239,63 @@ export default function ConfigPanel({
     setConfig((c) => ({ ...c, elements: elementsAfter }));
   };
 
+  const normSection = (s: string) => (s || "General").trim() || "General";
+  const getSectionOrderAndMap = () => {
+    const order: string[] = [];
+    const bySection = new Map<string, ElementDef[]>();
+    for (const el of config.elements) {
+      const sec = normSection(el.section ?? "General");
+      if (!bySection.has(sec)) {
+        order.push(sec);
+        bySection.set(sec, []);
+      }
+      bySection.get(sec)!.push(el);
+    }
+    return { sectionOrder: order, bySection };
+  };
+  const moveElementUp = (index: number) => {
+    const sec = normSection(config.elements[index]?.section ?? "General");
+    let swapWith = -1;
+    for (let i = index - 1; i >= 0; i--) {
+      if (normSection(config.elements[i].section ?? "General") === sec) {
+        swapWith = i;
+        break;
+      }
+    }
+    if (swapWith < 0) return;
+    setConfig((c) => {
+      const next = [...c.elements];
+      [next[swapWith], next[index]] = [next[index], next[swapWith]];
+      return { ...c, elements: next };
+    });
+  };
+  const moveElementDown = (index: number) => {
+    const sec = normSection(config.elements[index]?.section ?? "General");
+    const nextSameSection = config.elements.findIndex((el, i) => i > index && normSection(el.section ?? "General") === sec);
+    if (nextSameSection < 0) return;
+    setConfig((c) => {
+      const next = [...c.elements];
+      [next[index], next[nextSameSection]] = [next[nextSameSection], next[index]];
+      return { ...c, elements: next };
+    });
+  };
+  const moveSectionUp = (sectionName: string) => {
+    const { sectionOrder, bySection } = getSectionOrderAndMap();
+    const idx = sectionOrder.indexOf(sectionName);
+    if (idx <= 0) return;
+    const newOrder = [...sectionOrder.slice(0, idx - 1), sectionName, sectionOrder[idx - 1], ...sectionOrder.slice(idx + 1)];
+    const newElements = newOrder.flatMap((s) => bySection.get(s) ?? []);
+    setConfig((c) => ({ ...c, elements: newElements }));
+  };
+  const moveSectionDown = (sectionName: string) => {
+    const { sectionOrder, bySection } = getSectionOrderAndMap();
+    const idx = sectionOrder.indexOf(sectionName);
+    if (idx < 0 || idx >= sectionOrder.length - 1) return;
+    const newOrder = [...sectionOrder.slice(0, idx), sectionOrder[idx + 1], sectionName, ...sectionOrder.slice(idx + 2)];
+    const newElements = newOrder.flatMap((s) => bySection.get(s) ?? []);
+    setConfig((c) => ({ ...c, elements: newElements }));
+  };
+
   const knowledgeInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
@@ -358,10 +431,23 @@ export default function ConfigPanel({
 
           {selectedTypeId ? (
             <section className={`${sectionClass} flex min-h-0 flex-col overflow-hidden`}>
-              <h3 className={sectionTitleClass}>3. Elementos a identificar</h3>
-              <p className="mt-0.5 shrink-0 text-xs text-gray-500 dark:text-gray-400">
-                Defina los elementos (título y descripción) que el LLM buscará en el Excel extraído para mostrar en &quot;Proyecto extraído&quot;. Agrupe por sección.
-              </p>
+              <div className="flex shrink-0 items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <h3 className={sectionTitleClass}>3. Elementos a identificar</h3>
+                  <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    Defina los elementos (título y descripción) que el LLM buscará en el Excel extraído para mostrar en &quot;Proyecto extraído&quot;. Agrupe por sección.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setExpandSection("elements")}
+                  className="shrink-0 rounded p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                  title="Ampliar en ventana nueva"
+                  aria-label="Ampliar sección"
+                >
+                  <ExpandIcon />
+                </button>
+              </div>
               <div className="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto">
                 {(() => {
                   const bySection = new Map<string, { element: ElementDef; index: number }[]>();
@@ -370,8 +456,11 @@ export default function ConfigPanel({
                     if (!bySection.has(sec)) bySection.set(sec, []);
                     bySection.get(sec)!.push({ element: el, index: i });
                   });
-                  return Array.from(bySection.entries()).map(([secName, items]) => {
+                  const sectionEntries = Array.from(bySection.entries());
+                  return sectionEntries.map(([secName, items], sectionIndex) => {
                     const colors = getSectionColor(secName);
+                    const canSectionUp = sectionIndex > 0;
+                    const canSectionDown = sectionIndex < sectionEntries.length - 1;
                     return (
                       <div
                         key={secName}
@@ -381,48 +470,102 @@ export default function ConfigPanel({
                           <span className="text-xs font-semibold uppercase tracking-wide text-gray-700 dark:text-gray-300">
                             {secName}
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => removeSection(secName)}
-                            className="rounded p-1 text-gray-500 hover:bg-red-200 hover:text-red-700 dark:hover:text-red-400"
-                            title="Eliminar sección y todos sus elementos"
-                          >
-                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                            </svg>
-                          </button>
+                          <div className="flex items-center gap-0.5">
+                            <button
+                              type="button"
+                              onClick={() => moveSectionUp(secName)}
+                              disabled={!canSectionUp}
+                              className="rounded p-1 text-gray-500 hover:bg-gray-200 hover:text-gray-700 disabled:opacity-30 dark:hover:bg-gray-600 dark:hover:text-gray-200"
+                              title="Subir sección"
+                            >
+                              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                              </svg>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => moveSectionDown(secName)}
+                              disabled={!canSectionDown}
+                              className="rounded p-1 text-gray-500 hover:bg-gray-200 hover:text-gray-700 disabled:opacity-30 dark:hover:bg-gray-600 dark:hover:text-gray-200"
+                              title="Bajar sección"
+                            >
+                              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                              </svg>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => removeSection(secName)}
+                              className="rounded p-1 text-gray-500 hover:bg-red-200 hover:text-red-700 dark:hover:text-red-400"
+                              title="Eliminar sección y todos sus elementos"
+                            >
+                              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              </svg>
+                            </button>
+                          </div>
                         </div>
                         <div className="flex flex-wrap gap-1.5">
-                          {items.map(({ element: el, index }) => (
-                            <div
-                              key={index}
-                              className={`flex items-center gap-1 rounded border ${colors.card} px-2 py-1 text-sm shadow-sm`}
-                            >
-                              <span className="min-w-0 truncate font-medium text-gray-800 dark:text-gray-100" title={el.title}>
-                                {el.title || "(Sin título)"}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => openEditElementModal(index)}
-                                className="shrink-0 rounded p-0.5 text-gray-500 hover:bg-black/10 hover:text-gray-700 dark:hover:text-gray-300"
-                                title="Editar"
+                          {items.map(({ element: el, index }, itemIdx) => {
+                            const positionInSection = itemIdx + 1;
+                            const canElUp = itemIdx > 0;
+                            const canElDown = itemIdx < items.length - 1;
+                            return (
+                              <div
+                                key={index}
+                                className={`flex items-center gap-0.5 rounded border ${colors.card} px-2 py-1 text-sm shadow-sm`}
                               >
-                                <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                                </svg>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => removeElement(index)}
-                                className="shrink-0 rounded p-0.5 text-gray-500 hover:bg-red-200 hover:text-red-700 dark:hover:text-red-400"
-                                title="Quitar"
-                              >
-                                <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                </svg>
-                              </button>
-                            </div>
-                          ))}
+                                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-gray-300 text-xs font-semibold text-gray-700 dark:bg-gray-600 dark:text-gray-200" title={`Posición ${positionInSection} en la sección`}>
+                                  {positionInSection}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => moveElementUp(index)}
+                                  disabled={!canElUp}
+                                  className="shrink-0 rounded p-0.5 text-gray-500 hover:bg-black/10 hover:text-gray-700 disabled:opacity-30 dark:hover:text-gray-300"
+                                  title="Subir dentro de la sección"
+                                >
+                                  <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                                  </svg>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => moveElementDown(index)}
+                                  disabled={!canElDown}
+                                  className="shrink-0 rounded p-0.5 text-gray-500 hover:bg-black/10 hover:text-gray-700 disabled:opacity-30 dark:hover:text-gray-300"
+                                  title="Bajar dentro de la sección"
+                                >
+                                  <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                  </svg>
+                                </button>
+                                <span className="min-w-0 truncate font-medium text-gray-800 dark:text-gray-100" title={el.title}>
+                                  {el.title || "(Sin título)"}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => openEditElementModal(index)}
+                                  className="shrink-0 rounded p-0.5 text-gray-500 hover:bg-black/10 hover:text-gray-700 dark:hover:text-gray-300"
+                                  title="Editar"
+                                >
+                                  <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                                  </svg>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => removeElement(index)}
+                                  className="shrink-0 rounded p-0.5 text-gray-500 hover:bg-red-200 hover:text-red-700 dark:hover:text-red-400"
+                                  title="Quitar"
+                                >
+                                  <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                  </svg>
+                                </button>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     );
@@ -443,10 +586,23 @@ export default function ConfigPanel({
 
           {selectedTypeId ? (
             <section className={`${sectionClass} flex min-h-0 flex-col overflow-hidden`}>
-              <h3 className={sectionTitleClass}>4. Rúbrica</h3>
-              <p className="mt-0.5 shrink-0 text-xs text-gray-500 dark:text-gray-400">
-                Texto de la rúbrica: criterios, niveles y ponderaciones. El LLM usará esto para evaluar.
-              </p>
+              <div className="flex shrink-0 items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <h3 className={sectionTitleClass}>4. Rúbrica</h3>
+                  <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    Texto de la rúbrica: criterios, niveles y ponderaciones. El LLM usará esto para evaluar.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setExpandSection("rubric")}
+                  className="shrink-0 rounded p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                  title="Ampliar en ventana nueva"
+                  aria-label="Ampliar sección"
+                >
+                  <ExpandIcon />
+                </button>
+              </div>
               <textarea
                 value={config.rubric_prompt}
                 onChange={(e) => setConfig((c) => ({ ...c, rubric_prompt: e.target.value }))}
@@ -461,10 +617,23 @@ export default function ConfigPanel({
 
           {selectedTypeId ? (
             <section className={`${sectionClass} flex min-h-0 flex-col overflow-hidden`}>
-              <h3 className={sectionTitleClass}>5. Instrucciones</h3>
-              <p className="mt-0.5 shrink-0 text-xs text-gray-500 dark:text-gray-400">
-                Instrucciones y contexto general para que el LLM realice la evaluación según elementos, contenidos y rúbrica.
-              </p>
+              <div className="flex shrink-0 items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <h3 className={sectionTitleClass}>5. Instrucciones</h3>
+                  <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    Instrucciones y contexto general para que el LLM realice la evaluación según elementos, contenidos y rúbrica.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setExpandSection("instructions")}
+                  className="shrink-0 rounded p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                  title="Ampliar en ventana nueva"
+                  aria-label="Ampliar sección"
+                >
+                  <ExpandIcon />
+                </button>
+              </div>
               <textarea
                 value={config.instructions}
                 onChange={(e) => setConfig((c) => ({ ...c, instructions: e.target.value }))}
@@ -479,10 +648,23 @@ export default function ConfigPanel({
 
           {selectedTypeId ? (
             <section className={`${sectionClass} flex min-h-0 flex-col overflow-hidden`}>
-              <h3 className={sectionTitleClass}>6. Formato de informe</h3>
-              <p className="mt-0.5 shrink-0 text-xs text-gray-500 dark:text-gray-400">
-                Estructura, secciones y presentación del informe de evaluación.
-              </p>
+              <div className="flex shrink-0 items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <h3 className={sectionTitleClass}>6. Formato de informe</h3>
+                  <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    Estructura, secciones y presentación del informe de evaluación.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setExpandSection("reportFormat")}
+                  className="shrink-0 rounded p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                  title="Ampliar en ventana nueva"
+                  aria-label="Ampliar sección"
+                >
+                  <ExpandIcon />
+                </button>
+              </div>
               <textarea
                 value={config.report_format}
                 onChange={(e) => setConfig((c) => ({ ...c, report_format: e.target.value }))}
@@ -495,6 +677,104 @@ export default function ConfigPanel({
             <section className={`${sectionClass} flex min-h-0 flex-col items-center justify-center overflow-hidden`} />
           )}
         </div>
+
+        {expandSection === "elements" && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Elementos a identificar - ampliado" onClick={() => setExpandSection(null)}>
+            <div className="flex h-full max-h-[90vh] w-full max-w-4xl flex-col rounded-lg border border-gray-300 bg-white shadow-xl dark:border-gray-600 dark:bg-[#1e1e1e]" onClick={(e) => e.stopPropagation()}>
+              <div className="flex shrink-0 items-center justify-between gap-2 border-b border-gray-200 px-4 py-3 dark:border-gray-700">
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">3. Elementos a identificar</h2>
+                <button type="button" onClick={() => setExpandSection(null)} className="rounded p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700" aria-label="Cerrar">✕</button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                <div className="space-y-3 text-sm text-gray-800 dark:text-gray-200">
+                  {(() => {
+                    const bySection = new Map<string, ElementDef[]>();
+                    config.elements.forEach((el) => {
+                      const sec = (el.section ?? "General").trim() || "General";
+                      if (!bySection.has(sec)) bySection.set(sec, []);
+                      bySection.get(sec)!.push(el);
+                    });
+                    const sectionEntries = Array.from(bySection.entries());
+                    return sectionEntries.length === 0 ? (
+                      <p className="text-gray-500 dark:text-gray-400">No hay elementos definidos. Añádalos en la sección de configuración.</p>
+                    ) : (
+                      sectionEntries.map(([secName, items]) => {
+                        const colors = getSectionColor(secName);
+                        return (
+                          <div key={secName} className={`rounded-lg border-2 ${colors.border} ${colors.bg} p-3`}>
+                            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-700 dark:text-gray-300">{secName}</div>
+                            <ul className="space-y-2">
+                              {items.map((el, i) => (
+                                <li key={i} className={`rounded border ${colors.card} px-3 py-2`}>
+                                  <span className="font-medium">{el.title || "(Sin título)"}</span>
+                                  {el.description && <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">{el.description}</p>}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        );
+                      })
+                    );
+                  })()}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        {expandSection === "rubric" && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Rúbrica - ampliado" onClick={() => setExpandSection(null)}>
+            <div className="flex h-full max-h-[90vh] w-full max-w-4xl flex-col rounded-lg border border-gray-300 bg-white shadow-xl dark:border-gray-600 dark:bg-[#1e1e1e]" onClick={(e) => e.stopPropagation()}>
+              <div className="flex shrink-0 items-center justify-between gap-2 border-b border-gray-200 px-4 py-3 dark:border-gray-700">
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">4. Rúbrica</h2>
+                <button type="button" onClick={() => setExpandSection(null)} className="rounded p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700" aria-label="Cerrar">✕</button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-hidden p-4">
+                <textarea
+                  value={config.rubric_prompt}
+                  onChange={(e) => setConfig((c) => ({ ...c, rubric_prompt: e.target.value }))}
+                  className="h-full min-h-[300px] w-full resize-none rounded border border-gray-300 px-3 py-2 font-mono text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+                  placeholder="Describa la rúbrica: dimensiones, subcriterios, niveles (1-4), porcentajes..."
+                />
+              </div>
+            </div>
+          </div>
+        )}
+        {expandSection === "instructions" && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Instrucciones - ampliado" onClick={() => setExpandSection(null)}>
+            <div className="flex h-full max-h-[90vh] w-full max-w-4xl flex-col rounded-lg border border-gray-300 bg-white shadow-xl dark:border-gray-600 dark:bg-[#1e1e1e]" onClick={(e) => e.stopPropagation()}>
+              <div className="flex shrink-0 items-center justify-between gap-2 border-b border-gray-200 px-4 py-3 dark:border-gray-700">
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">5. Instrucciones</h2>
+                <button type="button" onClick={() => setExpandSection(null)} className="rounded p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700" aria-label="Cerrar">✕</button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-hidden p-4">
+                <textarea
+                  value={config.instructions}
+                  onChange={(e) => setConfig((c) => ({ ...c, instructions: e.target.value }))}
+                  className="h-full min-h-[300px] w-full resize-none rounded border border-gray-300 px-3 py-2 font-mono text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+                  placeholder="Ej.: Evalúa el proyecto usando el manual de Oslo y la rúbrica..."
+                />
+              </div>
+            </div>
+          </div>
+        )}
+        {expandSection === "reportFormat" && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Formato de informe - ampliado" onClick={() => setExpandSection(null)}>
+            <div className="flex h-full max-h-[90vh] w-full max-w-4xl flex-col rounded-lg border border-gray-300 bg-white shadow-xl dark:border-gray-600 dark:bg-[#1e1e1e]" onClick={(e) => e.stopPropagation()}>
+              <div className="flex shrink-0 items-center justify-between gap-2 border-b border-gray-200 px-4 py-3 dark:border-gray-700">
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">6. Formato de informe</h2>
+                <button type="button" onClick={() => setExpandSection(null)} className="rounded p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700" aria-label="Cerrar">✕</button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-hidden p-4">
+                <textarea
+                  value={config.report_format}
+                  onChange={(e) => setConfig((c) => ({ ...c, report_format: e.target.value }))}
+                  className="h-full min-h-[300px] w-full resize-none rounded border border-gray-300 px-3 py-2 font-mono text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+                  placeholder="Ej.: Incluye: 1. Resumen, 2. Notas por dimensión..."
+                />
+              </div>
+            </div>
+          </div>
+        )}
 
         {showElementModal && (
           <div

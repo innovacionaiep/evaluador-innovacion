@@ -12,6 +12,33 @@ function stripThinkBlocks(text: string): string {
   return out.trim();
 }
 
+/** Icono de carga animado (spinner). */
+function LoadingSpinner({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg
+      className={`animate-spin text-gray-500 dark:text-gray-400 ${className}`}
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      aria-hidden
+    >
+      <circle
+        className="opacity-25"
+        cx="12"
+        cy="12"
+        r="10"
+        stroke="currentColor"
+        strokeWidth="4"
+      />
+      <path
+        className="opacity-75"
+        fill="currentColor"
+        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+      />
+    </svg>
+  );
+}
+
 export default function ChatPanel({
   messages,
   onMessagesChange,
@@ -22,6 +49,7 @@ export default function ChatPanel({
   onProjectFilePathsChange,
   projectElementsTable,
   sessionId,
+  extractionLoading = false,
 }: {
   messages: ChatMessage[];
   onMessagesChange: (updater: (prev: ChatMessage[]) => ChatMessage[]) => void;
@@ -32,12 +60,15 @@ export default function ChatPanel({
   onProjectFilePathsChange: (paths: string[]) => void;
   projectElementsTable: { element: string; content: string }[];
   sessionId: string;
+  extractionLoading?: boolean;
 }) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [evaluating, setEvaluating] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const CHAT_TIMEOUT_MS = 120_000;
 
   const handleSend = async () => {
     const text = input.trim();
@@ -46,6 +77,8 @@ export default function ChatPanel({
     onMessagesChange((prev) => [...prev, { role: "user", content: text }]);
     onMessagesChange((prev) => [...prev, { role: "assistant", content: "" }]);
     setLoading(true);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
@@ -57,15 +90,18 @@ export default function ChatPanel({
           projectElementsTable: projectElementsTable?.length ? projectElementsTable : undefined,
           messages: messages.slice(0, -1),
         }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err?.error || res.statusText);
+        const msg = err?.message || err?.error || res.statusText;
+        throw new Error(msg);
       }
       const reader = res.body?.getReader();
       const decoder = new TextDecoder();
+      let accumulated = "";
       if (reader) {
-        let accumulated = "";
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -78,11 +114,23 @@ export default function ChatPanel({
           });
         }
       }
+      const final = stripThinkBlocks(accumulated);
+      if (!final.trim()) {
+        onMessagesChange((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last?.role === "assistant") next[next.length - 1] = { ...last, content: "[Sin respuesta del evaluador. Intenta de nuevo.]" };
+          return next;
+        });
+      }
     } catch (e) {
+      clearTimeout(timeoutId);
+      const msg = e instanceof Error ? e.message : String(e);
+      const isTimeout = msg.includes("abort") || msg.includes("timeout");
       onMessagesChange((prev) => {
         const next = [...prev];
         const last = next[next.length - 1];
-        if (last?.role === "assistant") next[next.length - 1] = { ...last, content: `[Error: ${e instanceof Error ? e.message : String(e)}]` };
+        if (last?.role === "assistant") next[next.length - 1] = { ...last, content: isTimeout ? "[Tiempo de espera agotado. El evaluador tardó demasiado.]" : `[Error: ${msg}]` };
         return next;
       });
     } finally {
@@ -107,7 +155,8 @@ export default function ChatPanel({
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err?.error || res.statusText);
+        const message = err?.message || err?.error || res.statusText;
+        throw new Error(message);
       }
       const reader = res.body?.getReader();
       const decoder = new TextDecoder();
@@ -169,24 +218,45 @@ export default function ChatPanel({
         {messages.map((m, i) => (
           <div
             key={i}
-            className={`mb-3 rounded-lg px-3 py-2 ${
-              m.role === "user"
-                ? "ml-8 bg-gray-200 dark:bg-gray-700"
-                : "mr-8 bg-gray-100 dark:bg-gray-800"
-            }`}
+            className={`mb-3 flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
           >
-            <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
-              {m.role === "user" ? "Usuario" : "Evaluador"}
-            </span>
-            <div className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {!m.content && loading && i === messages.length - 1 ? (
-                <span className="inline-block animate-pulse">…</span>
-              ) : (
-                m.content || "…"
-              )}
+            <div
+              className={`max-w-[85%] rounded-lg px-3 py-2 ${
+                m.role === "user"
+                  ? "bg-gray-200 dark:bg-gray-700"
+                  : "bg-gray-100 dark:bg-gray-800"
+              }`}
+            >
+              <span
+                className={`text-xs font-medium ${
+                  m.role === "user"
+                    ? "text-blue-600 dark:text-blue-400"
+                    : "text-red-600 dark:text-red-400"
+                }`}
+              >
+                {m.role === "user" ? "Usuario" : "Evaluador"}
+              </span>
+              <div className="mt-1 flex items-center gap-2 whitespace-pre-wrap break-words text-sm">
+                {m.role === "assistant" && !m.content && loading && i === messages.length - 1 ? (
+                  <>
+                    <LoadingSpinner />
+                    <span className="text-gray-500 dark:text-gray-400">Respondiendo…</span>
+                  </>
+                ) : (
+                  m.content || (m.role === "assistant" ? "…" : "")
+                )}
+              </div>
             </div>
           </div>
         ))}
+        {extractionLoading && (
+          <div className="mb-3 flex justify-start">
+            <div className="flex max-w-[85%] items-center gap-2 rounded-lg bg-gray-100 px-3 py-2 dark:bg-gray-800">
+              <LoadingSpinner />
+              <span className="text-sm text-gray-600 dark:text-gray-300">Trabajando en la extracción…</span>
+            </div>
+          </div>
+        )}
       </div>
       {projectFilePaths.length > 0 && (
         <div className="shrink-0 border-t border-gray-200 px-4 py-1.5 dark:border-gray-700">
