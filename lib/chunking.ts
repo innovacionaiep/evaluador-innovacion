@@ -1,4 +1,4 @@
-export type TextChunk = { text: string; docName: string; index: number };
+export type TextChunk = { text: string; docName: string; index: number; page?: number };
 
 const DEFAULT_CHUNK_SIZE = 1000;
 const DEFAULT_OVERLAP = 150;
@@ -23,8 +23,9 @@ function splitIntoSentences(text: string): string[] {
 export function chunkText(
   text: string,
   docName: string,
-  options: { chunkSizeChars?: number; overlapChars?: number } = {}
+  options: { chunkSizeChars?: number; overlapChars?: number; page?: number } = {}
 ): TextChunk[] {
+  const page = options.page;
   const chunkSize = options.chunkSizeChars ?? DEFAULT_CHUNK_SIZE;
   const overlap = options.overlapChars ?? DEFAULT_OVERLAP;
   if (!text || chunkSize <= 0) return [];
@@ -37,7 +38,7 @@ export function chunkText(
   for (const para of paragraphs) {
     if (para.length >= chunkSize) {
       if (buffer) {
-        result.push({ text: buffer.trim(), docName, index: chunkIndex++ });
+        result.push({ text: buffer.trim(), docName, index: chunkIndex++, page });
         buffer = "";
       }
       const sentences = splitIntoSentences(para);
@@ -47,17 +48,17 @@ export function chunkText(
           sentenceBuffer += (sentenceBuffer ? " " : "") + sent;
         } else {
           if (sentenceBuffer) {
-            result.push({ text: sentenceBuffer.trim(), docName, index: chunkIndex++ });
+            result.push({ text: sentenceBuffer.trim(), docName, index: chunkIndex++, page });
             const overlapStart = Math.max(0, sentenceBuffer.length - overlap);
             sentenceBuffer = sentenceBuffer.slice(overlapStart) + " " + sent;
           } else {
-            result.push({ text: sent.slice(0, chunkSize), docName, index: chunkIndex++ });
+            result.push({ text: sent.slice(0, chunkSize), docName, index: chunkIndex++, page });
             sentenceBuffer = sent.slice(chunkSize - overlap);
           }
         }
       }
       if (sentenceBuffer.trim()) {
-        result.push({ text: sentenceBuffer.trim(), docName, index: chunkIndex++ });
+        result.push({ text: sentenceBuffer.trim(), docName, index: chunkIndex++, page });
       }
       continue;
     }
@@ -66,7 +67,7 @@ export function chunkText(
       buffer += (buffer ? "\n\n" : "") + para;
     } else {
       if (buffer) {
-        result.push({ text: buffer.trim(), docName, index: chunkIndex++ });
+        result.push({ text: buffer.trim(), docName, index: chunkIndex++, page });
         const overlapStart = Math.max(0, buffer.length - overlap);
         buffer = buffer.slice(overlapStart) + "\n\n" + para;
       } else {
@@ -76,7 +77,7 @@ export function chunkText(
   }
 
   if (buffer.trim()) {
-    result.push({ text: buffer.trim(), docName, index: chunkIndex++ });
+    result.push({ text: buffer.trim(), docName, index: chunkIndex++, page });
   }
 
   return result;

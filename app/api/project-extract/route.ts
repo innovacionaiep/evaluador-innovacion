@@ -34,6 +34,14 @@ Tu tarea: para cada elemento de la lista, localiza en el JSON el contenido que m
 Formato de respuesta (solo este JSON, sin markdown ni texto adicional):
 [{"element":"Nombre del elemento","content":"texto encontrado"},...]`;
 
+/** Mapeo desde JSON genérico (array de {element, content}) a elementos de la configuración. */
+const GENERIC_ELEMENTS_MAP_PROMPT = `Te entrego un JSON con un array de elementos genéricos extraídos de un documento (cada uno con "element" y "content"). También te doy una lista de "elementos a identificar" con título y descripción.
+
+Tu tarea: para cada elemento de la lista a identificar, busca en el JSON genérico el contenido que mejor corresponde según su descripción. Devuelve ÚNICAMENTE un JSON válido, un array de objetos con "element" (el título del elemento de la lista tal cual) y "content" (texto encontrado, sin recortar). Si no encuentras contenido para un elemento, usa content: "".
+
+Formato de respuesta (solo este JSON, sin markdown ni texto adicional):
+[{"element":"Nombre del elemento","content":"texto encontrado"},...]`;
+
 type ElementDef = { title: string; description: string; section?: string };
 type ElementRow = { section: string; element: string; content: string };
 
@@ -70,6 +78,21 @@ function addSectionsToTable(
 
 function formatElementsTableAsText(table: ElementRow[]): string {
   return table.map((r) => `${r.element} | ${r.content}`).join("\n");
+}
+
+/** Parsea líneas "Elemento | Contenido" en un array JSON genérico. */
+function parseElementoContenidoToGenericJson(linesText: string): { element: string; content: string }[] {
+  const sep = " | ";
+  const out: { element: string; content: string }[] = [];
+  for (const line of linesText.split("\n")) {
+    const idx = line.indexOf(sep);
+    if (idx >= 0) {
+      const element = line.slice(0, idx).trim();
+      const content = line.slice(idx + sep.length).trim();
+      if (element) out.push({ element, content });
+    }
+  }
+  return out;
 }
 
 /** Extrae proyecto: Excel → JSON estructurado + opcional mapeo de elementos; otros formatos → texto + LLM Elemento | Contenido. */
@@ -171,6 +194,8 @@ export async function POST(request: Request) {
         const stream = new ReadableStream({
           async start(controller) {
             try {
+              controller.enqueue(encoder.encode(JSON.stringify({ type: "step", message: "Generando JSON del documento…" }) + "\n"));
+              controller.enqueue(encoder.encode(JSON.stringify({ type: "step", message: "Identificando elementos según configuración…" }) + "\n"));
               if (elementsTable.length > 0) {
                 for (const row of elementsTable) {
                   controller.enqueue(encoder.encode(JSON.stringify({ type: "element", name: row.element }) + "\n"));
@@ -205,7 +230,7 @@ export async function POST(request: Request) {
       });
     }
 
-    // Non-Excel path: combine text and LLM structure as before
+    // Non-Excel path (PDF, Word, etc.): texto → LLM Elemento|Contenido → JSON genérico → identificación con config
     const combined = textParts.join("\n\n---\n\n").trim();
     if (!combined) {
       return NextResponse.json({ text: "No se pudo extraer texto de los archivos." });
@@ -219,10 +244,8 @@ export async function POST(request: Request) {
       const stream = new ReadableStream({
         async start(controller) {
           try {
-            let fullText = "";
-            let buffer = "";
-            const sep = " | ";
-            for await (const chunk of streamChat(
+            controller.enqueue(encoder.encode(JSON.stringify({ type: "step", message: "Leyendo documento y generando JSON…" }) + "\n"));
+            const genericStructured = await chatCompletion(
               [
                 {
                   role: "system",
@@ -232,37 +255,64 @@ export async function POST(request: Request) {
                 { role: "user", content: `${STRUCTURE_PROMPT}\n\n---\n\n${truncated}` },
               ],
               { max_tokens: 16384 }
-            )) {
-              fullText += chunk;
-              buffer += chunk;
-              const lines = buffer.split("\n");
-              buffer = lines.pop() ?? "";
-              for (const line of lines) {
-                const idx = line.indexOf(sep);
-                if (idx >= 0) {
-                  const name = line.slice(0, idx).trim();
-                  if (name) {
-                    controller.enqueue(encoder.encode(JSON.stringify({ type: "element", name }) + "\n"));
-                  }
+            );
+            const genericElements = parseElementoContenidoToGenericJson((genericStructured && genericStructured.trim()) || "");
+            const genericJson = { source: "document", elements: genericElements };
+
+            controller.enqueue(encoder.encode(JSON.stringify({ type: "step", message: "Identificando elementos según configuración…" }) + "\n"));
+            let elementsTable: ElementRow[] = [];
+            let configElements: ElementDef[] = [];
+            if (evaluationTypeId) {
+              const config = await getConfig(evaluationTypeId);
+              if (config?.elements) {
+                try {
+                  const raw = typeof config.elements === "string" ? config.elements : JSON.stringify(config.elements);
+                  const parsed = JSON.parse(raw) as unknown[];
+                  configElements = Array.isArray(parsed)
+                    ? parsed.filter((e): e is ElementDef => typeof e === "object" && e != null && "title" in e && "description" in e)
+                    .map((e) => ({ ...e, section: typeof (e as ElementDef).section === "string" ? (e as ElementDef).section : "General" }))
+                    : [];
+                } catch {
+                  configElements = [];
                 }
               }
             }
-            if (buffer) {
-              const idx = buffer.indexOf(sep);
-              if (idx >= 0) {
-                const name = buffer.slice(0, idx).trim();
-                if (name) {
-                  controller.enqueue(encoder.encode(JSON.stringify({ type: "element", name }) + "\n"));
-                }
-              }
+            if (configElements.length > 0 && genericElements.length > 0) {
+              const elementsListStr = configElements
+                .map((e) => `- Título: "${e.title}". Descripción: ${e.description}`)
+                .join("\n");
+              const userContent = `JSON genérico del documento:\n${JSON.stringify(genericJson)}\n\nElementos a identificar:\n${elementsListStr}`;
+              const llmResponse = await chatCompletion(
+                [
+                  { role: "system", content: GENERIC_ELEMENTS_MAP_PROMPT },
+                  { role: "user", content: userContent },
+                ],
+                { max_tokens: 8192 }
+              );
+              const rawTable = parseElementsTableFromLLM(llmResponse?.trim() ?? "[]");
+              elementsTable = addSectionsToTable(rawTable, configElements);
+            } else if (genericElements.length > 0) {
+              elementsTable = genericElements.map((r) => ({ section: "General", element: r.element, content: r.content }));
             }
-            const text = (fullText && fullText.trim()) || combined;
-            controller.enqueue(encoder.encode(JSON.stringify({ type: "done", text }) + "\n"));
+            const text = elementsTable.length > 0 ? formatElementsTableAsText(elementsTable) : formatElementsTableAsText(genericElements.map((r) => ({ section: "General", element: r.element, content: r.content })));
+            for (const row of elementsTable) {
+              controller.enqueue(encoder.encode(JSON.stringify({ type: "element", name: row.element }) + "\n"));
+            }
+            controller.enqueue(
+              encoder.encode(
+                JSON.stringify({
+                  type: "done",
+                  text,
+                  structuredData: genericJson,
+                  elementsTable: elementsTable.length ? elementsTable : undefined,
+                }) + "\n"
+              )
+            );
           } catch (err) {
             controller.enqueue(encoder.encode(JSON.stringify({ type: "error", error: String(err) }) + "\n"));
           } finally {
-            controller.close();
-          }
+              controller.close();
+            }
         },
       });
       return new Response(stream, {
@@ -270,7 +320,7 @@ export async function POST(request: Request) {
       });
     }
 
-    const structured = await chatCompletion(
+    const genericStructured = await chatCompletion(
       [
         {
           role: "system",
@@ -281,8 +331,50 @@ export async function POST(request: Request) {
       ],
       { max_tokens: 16384 }
     );
-    const text = (structured && structured.trim()) || combined;
-    return NextResponse.json({ text });
+    const genericElements = parseElementoContenidoToGenericJson((genericStructured && genericStructured.trim()) || "");
+    const genericJson = { source: "document", elements: genericElements };
+
+    let elementsTable: ElementRow[] = [];
+    let configElements: ElementDef[] = [];
+    if (evaluationTypeId) {
+      const config = await getConfig(evaluationTypeId);
+      if (config?.elements) {
+        try {
+          const raw = typeof config.elements === "string" ? config.elements : JSON.stringify(config.elements);
+          const parsed = JSON.parse(raw) as unknown[];
+          configElements = Array.isArray(parsed)
+            ? parsed.filter((e): e is ElementDef => typeof e === "object" && e != null && "title" in e && "description" in e)
+            .map((e) => ({ ...e, section: typeof (e as ElementDef).section === "string" ? (e as ElementDef).section : "General" }))
+            : [];
+        } catch {
+          configElements = [];
+        }
+      }
+    }
+    if (configElements.length > 0 && genericElements.length > 0) {
+      const elementsListStr = configElements
+        .map((e) => `- Título: "${e.title}". Descripción: ${e.description}`)
+        .join("\n");
+      const userContent = `JSON genérico del documento:\n${JSON.stringify(genericJson)}\n\nElementos a identificar:\n${elementsListStr}`;
+      const llmResponse = await chatCompletion(
+        [
+          { role: "system", content: GENERIC_ELEMENTS_MAP_PROMPT },
+          { role: "user", content: userContent },
+        ],
+        { max_tokens: 8192 }
+      );
+      const rawTable = parseElementsTableFromLLM(llmResponse?.trim() ?? "[]");
+      elementsTable = addSectionsToTable(rawTable, configElements);
+    } else if (genericElements.length > 0) {
+      elementsTable = genericElements.map((r) => ({ section: "General", element: r.element, content: r.content }));
+    }
+    const text = elementsTable.length > 0 ? formatElementsTableAsText(elementsTable) : formatElementsTableAsText(genericElements.map((r) => ({ section: "General", element: r.element, content: r.content })));
+    return NextResponse.json({
+      text,
+      structured: true,
+      structuredData: genericJson,
+      elementsTable: elementsTable.length ? elementsTable : undefined,
+    });
   } catch (e) {
     return NextResponse.json({ error: String(e), text: "" }, { status: 500 });
   }

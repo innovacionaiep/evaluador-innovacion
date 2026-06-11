@@ -1,21 +1,41 @@
 import { NextResponse } from "next/server";
 import { getConfig } from "@/lib/db";
-import { buildSystemContext } from "@/lib/build-context";
+import { buildSystemContext, type ProjectStructuredData } from "@/lib/build-context";
 import { streamChat } from "@/lib/openrouter";
+import {
+  classifyChatIntent,
+  chatIntentToContextMode,
+  parsePageFromQuery,
+  parseChapterFromQuery,
+} from "@/lib/chat-intent";
+import type { ContextMode } from "@/lib/rag-limits";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 120;
 
-/** Primera regla: preguntas sobre configuración se responden solo desde la sección "Configuración actual". */
 const CONFIG_RULE =
   "REGLA OBLIGATORIA (configuración): Si preguntan por las INSTRUCCIONES de evaluación, el FORMATO del informe o los ELEMENTOS A IDENTIFICAR del proyecto, responde ÚNICAMENTE con lo que dice la sección 'Configuración actual de este tipo de evaluación'. No uses el manual de referencia ni inventes contenido. Si ahí dice 'Vacío' o 'Ninguno configurado', responde eso.\n\n";
 
-/** Cuando no hay rúbrica, esta regla va después para que el modelo no describa estructuras antiguas. */
 const NO_RUBRIC_RULE =
   "REGLA OBLIGATORIA (solo para rúbrica): No hay rúbrica configurada. Si preguntan específicamente por la rúbrica o los criterios de evaluación (no por las instrucciones ni por los elementos a identificar), responde SOLO: «No hay rúbrica definida en la configuración actual.» No confundas instrucciones con rúbrica: son cosas distintas.\n\n";
 
-/** Máximo de mensajes de historial y longitud por mensaje para no exceder contexto y evitar timeouts. */
 const MAX_HISTORY_MESSAGES = 8;
 const MAX_MESSAGE_CHARS = 2000;
+
+const INTENT_HINTS: Record<string, string> = {
+  config:
+    "El usuario pregunta sobre la CONFIGURACIÓN (instrucciones, formato, elementos o rúbrica configurada). Responde solo desde las secciones de configuración.\n\n",
+  knowledge:
+    "El usuario pregunta sobre el MANUAL / KNOWLEDGE de referencia. Responde con naturalidad basándote en la documentación de referencia. Si falta información concreta, dilo dentro del texto sin añadir notas meta al final sobre fragmentos o knowledge.\n\n",
+  project:
+    "El usuario pregunta sobre el PROYECTO subido. Prioriza 'Documentos del proyecto a evaluar' y datos del Excel.\n\n",
+};
+
+const pageQuestionRule = (page: number) =>
+  `REGLA OBLIGATORIA (página ${page}): El usuario pide el contenido de la página ${page} del Manual de referencia. Responde SOLO con lo que aparece en los fragmentos del Knowledge de esa página. PROHIBIDO usar la rúbrica IGIP, notas 1-4, Novedad, Impacto o Escalabilidad. Si el texto no está en los fragmentos, dilo sin inventar. No añadas notas meta al final sobre fragmentos o knowledge.\n\n`;
+
+const chapterQuestionRule = (chapter: number) =>
+  `REGLA OBLIGATORIA (capítulo ${chapter}): Resumen del Capítulo ${chapter}. Sigue el «Formato obligatorio de la respuesta» del system prompt: un encabezado ### por cada sección del índice, en orden, con 2–5 oraciones bajo cada uno. PROHIBIDO omitir secciones (p. ej. saltar de ${chapter}.1.4 a ${chapter}.3 sin ${chapter}.2). PROHIBIDO fusionar encabezados o poner solo «resumen anticipado» en lugar del contenido. Si una subsección anticipa otro capítulo, dilo dentro de su párrafo. PROHIBIDO usar la rúbrica. Sin notas finales sobre fragmentos o knowledge.\n\n`;
 
 export async function POST(request: Request) {
   try {
@@ -30,6 +50,12 @@ export async function POST(request: Request) {
           (r) => r && typeof r.element === "string"
         ).map((r) => ({ element: r.element!, content: typeof r.content === "string" ? r.content : "" }))
       : undefined;
+    const projectStructuredData =
+      body?.projectStructuredData &&
+      Array.isArray((body.projectStructuredData as { files?: unknown }).files) &&
+      (body.projectStructuredData as { files: unknown[] }).files.length > 0
+        ? (body.projectStructuredData as ProjectStructuredData)
+        : undefined;
     const historyRaw = Array.isArray(body?.messages)
       ? (body.messages as { role: string; content: string }[]).filter(
           (m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string"
@@ -49,25 +75,61 @@ export async function POST(request: Request) {
     const config = await getConfig(evaluationTypeId);
     const hasRubric = !!((config?.rubric_prompt ?? "").trim());
     const hasInstructions = !!((config?.instructions ?? "").trim() || (config?.prompt ?? "").trim());
-    const skipKnowledge = !hasInstructions && !hasRubric;
+    const hasProjectData =
+      !!(projectElementsTable?.length || projectStructuredData?.files?.length);
+
+    const pageNumber = parsePageFromQuery(message);
+    const chapterNumber = pageNumber == null ? parseChapterFromQuery(message) : undefined;
+    const intent =
+      pageNumber != null || chapterNumber != null
+        ? "knowledge"
+        : classifyChatIntent(message, hasProjectData);
+    const contextMode: ContextMode =
+      chapterNumber != null
+        ? "chat-chapter"
+        : chatIntentToContextMode(intent);
+
+    const skipKnowledgeLegacy = !hasInstructions && !hasRubric;
+    const ragQuery =
+      intent === "config"
+        ? undefined
+        : pageNumber != null
+          ? `Manual Oslo página ${pageNumber} chapter section content`
+          : chapterNumber != null
+            ? `Manual Oslo Chapter ${chapterNumber} capítulo ${chapterNumber} resumen`
+            : [message, intent === "knowledge" ? "Manual Oslo marco teórico innovación" : ""]
+                .filter(Boolean)
+                .join(" ");
 
     const systemContent = await buildSystemContext(evaluationTypeId, projectFilePaths, {
       projectElementsTable: projectElementsTable?.length ? projectElementsTable : undefined,
-      skipKnowledge,
+      projectStructuredData,
+      skipKnowledge: skipKnowledgeLegacy || intent === "config",
+      projectElementsOnly: true,
+      contextMode,
+      ragQuery,
+      pageNumber,
+      chapterNumber,
     });
-    const projectSectionMarker = "## Documentos del proyecto a evaluar";
-    const projectSectionStart = systemContent.indexOf(projectSectionMarker);
-    const projectSection =
-      projectSectionStart >= 0
-        ? systemContent.slice(projectSectionStart, projectSectionStart + 5000)
-        : "(no encontrada)";
+
     const languageInstruction =
       "Responde siempre en español. Todas tus respuestas deben estar escritas íntegramente en español.\n\n";
     const baseInstruction =
-      "Eres un asistente experto en evaluación de proyectos. Responde con claridad y basándote en la documentación y rúbrica cuando estén disponibles. En la sección 'Documentos del proyecto a evaluar' tienes el contenido de los archivos que el usuario ha subido; úsala para responder sobre el proyecto cuando pregunten.\n\nREGLA OBLIGATORIA para objetivos: Si preguntan por el objetivo general o los objetivos específicos del proyecto, tu respuesta debe citar ÚNICAMENTE el texto que aparece en esa sección: busca la línea que dice 'OBJETIVO GENERAL:' y copia exactamente lo que viene después; busca 'OBJETIVOS ESPECÍFICOS:' y las líneas '1.', '2.', '3.' y copia exactamente ese texto. No parafrasees, no interpretes, no reescribas. Si no encuentras ese texto en los Documentos del proyecto, dilo.\n\nNo uses nunca las etiquetas <think> ni </think> en tus respuestas; responde directamente sin mostrar tu razonamiento interno.";
+      "Eres un asistente experto en evaluación de proyectos. Responde con claridad y basándote en la documentación y rúbrica cuando estén disponibles.\n\nREGLA OBLIGATORIA para objetivos: Si preguntan por el objetivo general o los objetivos específicos del proyecto, cita ÚNICAMENTE el texto de la sección del proyecto. No parafrasees.\n\nNo uses nunca las etiquetas <think> ni </think> en tus respuestas.";
     const noRubricPrefix = !hasRubric ? NO_RUBRIC_RULE : "";
+    const pageRule = pageNumber != null ? pageQuestionRule(pageNumber) : "";
+    const chapterRule = chapterNumber != null ? chapterQuestionRule(chapterNumber) : "";
+    const focusedKnowledgeQuery = pageNumber != null || chapterNumber != null;
+    const intentHint = focusedKnowledgeQuery ? "" : INTENT_HINTS[intent] ?? "";
+    const configRuleForPage = focusedKnowledgeQuery ? "" : CONFIG_RULE;
     const systemMessage =
-      CONFIG_RULE + noRubricPrefix + languageInstruction + (systemContent || baseInstruction);
+      configRuleForPage +
+      pageRule +
+      chapterRule +
+      noRubricPrefix +
+      intentHint +
+      languageInstruction +
+      (systemContent || baseInstruction);
 
     const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
       { role: "system", content: systemMessage },

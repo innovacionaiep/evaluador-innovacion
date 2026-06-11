@@ -2,6 +2,13 @@ import { NextResponse } from "next/server";
 import { getConfig, updateConfig } from "@/lib/db";
 import { getEvaluationTypeById } from "@/lib/db";
 import { indexKnowledge } from "@/lib/rag-index";
+import {
+  deleteRemovedLocalKnowledgeFiles,
+  knowledgeItemKey,
+  type KnowledgePathItem,
+} from "@/lib/knowledge-cleanup";
+
+export const maxDuration = 300;
 
 export async function GET(
   _request: Request,
@@ -75,19 +82,61 @@ export async function PATCH(
     const instructions = typeof body?.instructions === "string" ? body.instructions : undefined;
     const report_format = typeof body?.report_format === "string" ? body.report_format : undefined;
     const rubric_prompt = typeof body?.rubric_prompt === "string" ? body.rubric_prompt : undefined;
-    await updateConfig(id, {
-      prompt,
-      knowledge_paths,
-      rubric_path,
-      elements,
-      instructions,
-      report_format,
-      rubric_prompt,
-    });
+
+    let indexResult: { chunkCount: number } | undefined;
+    let indexError: string | undefined;
+
     if (knowledge_paths !== undefined) {
-      indexKnowledge(id).catch(() => {});
+      const current = await getConfig(id);
+      const previous: KnowledgePathItem[] = (() => {
+        try {
+          const raw = JSON.parse(current?.knowledge_paths || "[]");
+          return Array.isArray(raw) ? raw : [];
+        } catch {
+          return [];
+        }
+      })();
+      const next = knowledge_paths as KnowledgePathItem[];
+      const prevKeys = new Set(previous.map(knowledgeItemKey));
+      const nextKeys = new Set(next.map(knowledgeItemKey));
+      const removed = previous.filter((p) => !nextKeys.has(knowledgeItemKey(p)));
+      const added = next.filter((p) => !prevKeys.has(knowledgeItemKey(p)));
+      deleteRemovedLocalKnowledgeFiles(id, removed, next);
+
+      await updateConfig(id, {
+        prompt,
+        knowledge_paths,
+        rubric_path,
+        elements,
+        instructions,
+        report_format,
+        rubric_prompt,
+      });
+
+      if (removed.length > 0 || added.length > 0 || next.length === 0) {
+        try {
+          indexResult = await indexKnowledge(id);
+        } catch (e) {
+          indexError = e instanceof Error ? e.message : String(e);
+        }
+      }
+    } else {
+      await updateConfig(id, {
+        prompt,
+        knowledge_paths,
+        rubric_path,
+        elements,
+        instructions,
+        report_format,
+        rubric_prompt,
+      });
     }
-    return NextResponse.json({ ok: true });
+
+    return NextResponse.json({
+      ok: true,
+      chunkCount: indexResult?.chunkCount,
+      indexError,
+    });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }

@@ -7,6 +7,7 @@ import ReportPanel from "@/components/ReportPanel";
 import ConfigPanel from "@/components/ConfigPanel";
 import FullscreenOverlay, { ExpandIcon } from "@/components/FullscreenOverlay";
 import type { ChatMessage } from "@/components/ChatPanel";
+import type { ProjectStructuredData } from "@/lib/build-context";
 
 type EvaluationType = { id: number; name: string };
 
@@ -45,6 +46,7 @@ export default function Home() {
   const [projectFilePaths, setProjectFilePaths] = useState<string[]>([]);
   const [extractedProjectText, setExtractedProjectText] = useState("");
   const [extractedProjectTable, setExtractedProjectTable] = useState<{ section?: string; element: string; content: string }[]>([]);
+  const [extractedStructuredData, setExtractedStructuredData] = useState<ProjectStructuredData | null>(null);
   const [extractedProjectLoading, setExtractedProjectLoading] = useState(false);
   const [elementsWithSection, setElementsWithSection] = useState<{ title: string; section: string }[]>([]);
   const [projectSectionOpen, setProjectSectionOpen] = useState(true);
@@ -95,6 +97,7 @@ export default function Home() {
     if (projectFilePaths.length === 0) {
       setExtractedProjectText("");
       setExtractedProjectTable([]);
+      setExtractedStructuredData(null);
       setExtractedProjectLoading(false);
       return;
     }
@@ -136,16 +139,26 @@ export default function Home() {
               try {
                 const data = JSON.parse(trimmed) as {
                   type: string;
+                  message?: string;
                   name?: string;
                   text?: string;
                   error?: string;
                   elementsTable?: { element: string; content: string }[];
+                  structuredData?: ProjectStructuredData;
                 };
-                if (data.type === "element" && typeof data.name === "string") {
+                if (data.type === "step" && typeof data.message === "string") {
                   setMessages((prev) => {
                     const next = [...prev];
                     const last = next[next.length - 1];
-                    if (last?.role === "assistant" && last.content.startsWith("Detectando")) {
+                    if (last?.role === "assistant") next[next.length - 1] = { ...last, content: data.message! };
+                    else next.push({ role: "assistant", content: data.message! });
+                    return next;
+                  });
+                } else if (data.type === "element" && typeof data.name === "string") {
+                  setMessages((prev) => {
+                    const next = [...prev];
+                    const last = next[next.length - 1];
+                    if (last?.role === "assistant" && (last.content.endsWith("…") || last.content.includes("Identificando"))) {
                       const sep = last.content.endsWith("…") ? "\n\n" : "\n";
                       next[next.length - 1] = { ...last, content: last.content + sep + data.name + " ✓" };
                     }
@@ -160,8 +173,10 @@ export default function Home() {
                         content: r.content,
                       }))
                     : [];
+                  const sd = data.structuredData;
                   setExtractedProjectText(text);
                   setExtractedProjectTable(table);
+                  setExtractedStructuredData(sd?.files?.length ? sd : null);
                   setMessages((prev) => [...prev, { role: "assistant", content: "Extracción completada." }]);
                   setExtractedProjectLoading(false);
                 } else if (data.type === "error" && data.error) {
@@ -180,6 +195,7 @@ export default function Home() {
                 text?: string;
                 error?: string;
                 elementsTable?: { element: string; content: string }[];
+                structuredData?: ProjectStructuredData;
               };
               if (data.type === "done") {
                 setExtractedProjectText(typeof data.text === "string" ? data.text : "");
@@ -190,7 +206,9 @@ export default function Home() {
                       content: r.content,
                     }))
                   : [];
+                const sd = data.structuredData;
                 setExtractedProjectTable(table);
+                setExtractedStructuredData(sd?.files?.length ? sd : null);
                 setMessages((prev) => [...prev, { role: "assistant", content: "Extracción completada." }]);
                 setExtractedProjectLoading(false);
               }
@@ -203,6 +221,7 @@ export default function Home() {
         .catch((err) => {
           setExtractedProjectText("");
           setExtractedProjectTable([]);
+          setExtractedStructuredData(null);
           const msg = err?.message?.includes("429")
             ? "Extracción fallida: límite de uso temporal. Reintente en unos momentos."
             : "Extracción fallida.";
@@ -256,6 +275,7 @@ export default function Home() {
             projectFilePaths={projectFilePaths}
             onProjectFilePathsChange={setProjectFilePaths}
             projectElementsTable={extractedProjectTable}
+            projectStructuredData={extractedStructuredData ?? undefined}
             sessionId={SESSION_ID}
             extractionLoading={extractedProjectLoading}
           />

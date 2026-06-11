@@ -2,16 +2,21 @@ import { getConfig } from "@/lib/db";
 import { extractTextFromFile } from "@/lib/document-parser";
 import { getKnowledgeDocuments } from "@/lib/knowledge-loader";
 import { hasChunks } from "@/lib/vector-store";
-import { retrieveRelevantChunks } from "@/lib/rag-retrieve";
+import { retrieveRelevantChunks, type RetrievedChunk } from "@/lib/rag-retrieve";
+import { retrieveChunksForPrintedPage } from "@/lib/page-lookup";
+import { getChapterContextForEvaluation } from "@/lib/chapter-lookup";
+import {
+  CONTEXT_LIMITS,
+  RAG_QUERY_PROMPT_CHARS,
+  RAG_QUERY_RUBRIC_CHARS,
+  type ContextMode,
+} from "@/lib/rag-limits";
 import path from "path";
 import fs from "fs";
-import os from "os";
 
-/** Max system context length (chars) to stay within model context + completion (e.g. 6000 TPM). */
-const MAX_SYSTEM_CONTEXT_CHARS = 24_000;
-/** Max chars for project section so objectives block is not pushed out by truncation. */
 const MAX_PROJECT_SECTION_CHARS = 18_000;
-/** Extract OBJETIVO GENERAL + OBJETIVOS ESPECÍFICOS block and rest of text (no duplication). */
+const MAX_STRUCTURED_SUMMARY_CHARS = 16_000;
+
 function extractObjectivesAndRest(text: string): { block: string | null; rest: string } {
   const gen = /OBJETIVO\s+GENERAL\s*:?\s*/i;
   const esp = /OBJETIVOS\s+ESPECÍFICOS\s*:?\s*/i;
@@ -24,16 +29,83 @@ function extractObjectivesAndRest(text: string): { block: string | null; rest: s
   const rest = (text.slice(0, start).trim() + "\n\n" + text.slice(start + blockLen).trim()).trim();
   return { block, rest };
 }
-const RAG_QUERY_PROMPT_CHARS = 500;
-const RAG_QUERY_RUBRIC_CHARS = 500;
-const RAG_TOP_K = 20;
-const RAG_MAX_RETRIEVED_CHARS = 18_000;
+
+export type ProjectStructuredData = {
+  files: Array<{
+    fileName: string;
+    sheets: Array<{
+      sheetName: string;
+      cells: Array<{ row: number; col: number; value: string }>;
+    }>;
+  }>;
+};
+
+function formatStructuredDataSummary(data: ProjectStructuredData, maxChars: number): string {
+  const parts: string[] = [];
+  for (const file of data.files ?? []) {
+    parts.push(`### Archivo: ${file.fileName}`);
+    for (const sheet of file.sheets ?? []) {
+      parts.push(`\n#### Hoja: ${sheet.sheetName}\n`);
+      const cells = (sheet.cells ?? []).slice();
+      cells.sort((a, b) => a.row - b.row || a.col - b.col);
+      for (const c of cells) {
+        parts.push(`(fila ${c.row}, col ${c.col}): ${String(c.value ?? "").trim()}\n`);
+      }
+    }
+  }
+  const out = parts.join("");
+  return out.length > maxChars ? out.slice(0, maxChars) + "\n\n[Contenido truncado por límite de longitud.]" : out;
+}
 
 export type BuildSystemContextOptions = {
   projectElementsTable?: { element: string; content: string }[];
-  /** Si true, no se incluye la documentación de referencia (Knowledge). Útil en el chat cuando instrucciones y rúbrica están vacías para que el LLM no cite el manual como si fuera la configuración. */
+  projectStructuredData?: ProjectStructuredData;
   skipKnowledge?: boolean;
+  projectElementsOnly?: boolean;
+  excludeReportFormat?: boolean;
+  /** Modo de límites RAG y contexto. */
+  contextMode?: ContextMode;
+  /** Query para recuperación RAG (pregunta del usuario o dimensión de evaluación). */
+  ragQuery?: string;
+  excludeChunkIds?: Set<string>;
+  pageNumber?: number;
+  chapterNumber?: number;
+  /** En evaluación multi-dimensión: enfoque en una sola dimensión. */
+  evaluateDimension?: { name: string; content: string };
+  /** Callback con chunks recuperados (p. ej. deduplicación en evaluación). */
+  onRetrievedChunks?: (chunks: RetrievedChunk[]) => void;
 };
+
+function buildDefaultRagQuery(
+  promptForInstructions: string,
+  rubricText: string,
+  extra?: string
+): string {
+  return [
+    promptForInstructions.slice(0, RAG_QUERY_PROMPT_CHARS),
+    rubricText.slice(0, RAG_QUERY_RUBRIC_CHARS),
+    extra ?? "Evaluar proyecto según rúbrica y documentación de referencia Manual Oslo innovación.",
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+}
+
+function formatKnowledgeChunks(
+  chunks: Array<{ docName: string; text: string; page?: number; printedPage?: number }>
+): string {
+  return chunks
+    .map((c) => {
+      const pageLabel =
+        c.printedPage != null
+          ? ` (página impresa ${c.printedPage})`
+          : c.page != null
+            ? ` (pág. PDF ${c.page})`
+            : "";
+      return `### Documento: ${c.docName}${pageLabel}\n\n${c.text}`;
+    })
+    .join("\n\n---\n\n");
+}
 
 export async function buildSystemContext(
   evaluationTypeId: number,
@@ -43,6 +115,78 @@ export async function buildSystemContext(
   const config = await getConfig(evaluationTypeId);
   if (!config) return "";
 
+  const mode: ContextMode = options?.contextMode ?? "chat-project";
+  const limits = CONTEXT_LIMITS[mode];
+  const maxSystemChars = limits.maxSystemChars;
+  const pageLookup =
+    options?.pageNumber != null &&
+    !options?.skipKnowledge &&
+    (mode === "chat-knowledge" || mode === "chat-project" || mode === "chat-chapter");
+
+  const chapterLookup =
+    options?.chapterNumber != null &&
+    options?.pageNumber == null &&
+    !options?.skipKnowledge &&
+    (mode === "chat-chapter" || mode === "chat-knowledge" || mode === "chat-project");
+
+  // Modo capítulo: fragmentos contiguos del capítulo (sin rúbrica ni instrucciones).
+  if (chapterLookup && hasChunks(evaluationTypeId)) {
+    const targetChapter = options!.chapterNumber!;
+    const chapterCtx = getChapterContextForEvaluation(
+      evaluationTypeId,
+      targetChapter,
+      limits.maxRetrievedChars
+    );
+    if (chapterCtx && chapterCtx.chunks.length > 0) {
+      options?.onRetrievedChunks?.(chapterCtx.chunks);
+      return [
+        `## Capítulo ${targetChapter} del manual de referencia`,
+        "",
+        chapterCtx.rules,
+        "",
+        "## Texto del capítulo (fragmentos indexados)",
+        "",
+        "REGLA: Sigue el «Formato obligatorio de la respuesta» e incluye todas las secciones del índice con encabezado y párrafo propios. No omitas secciones ni uses solo la etiqueta «resumen anticipado». No uses la rúbrica IGIP. No inventes contenido.",
+        "",
+        formatKnowledgeChunks(chapterCtx.chunks),
+      ].join("\n");
+    }
+    return [
+      `## Capítulo ${targetChapter} del manual`,
+      "",
+      `No se encontraron fragmentos indexados del Capítulo ${targetChapter}.`,
+      "Indica al usuario que verifique el número de capítulo e intente reindexar el knowledge si el manual fue actualizado.",
+      "No inventes ni uses la rúbrica de evaluación para responder.",
+    ].join("\n");
+  }
+
+  // Modo página: solo fragmentos del manual para esa página (sin rúbrica ni instrucciones).
+  if (pageLookup && hasChunks(evaluationTypeId)) {
+    const targetPage = options!.pageNumber!;
+    const pageChunks = retrieveChunksForPrintedPage(
+      evaluationTypeId,
+      targetPage,
+      limits.maxRetrievedChars
+    );
+    if (pageChunks.length > 0) {
+      options?.onRetrievedChunks?.(pageChunks);
+      return [
+        `## Contenido de la página ${targetPage} del manual de referencia`,
+        "",
+        "REGLA: Responde ÚNICAMENTE describiendo o citando el texto de los fragmentos siguientes. No uses la rúbrica IGIP ni criterios de evaluación del proyecto. No inventes contenido.",
+        "",
+        formatKnowledgeChunks(pageChunks),
+      ].join("\n");
+    }
+    return [
+      `## Página ${targetPage} del manual`,
+      "",
+      `No se encontraron fragmentos indexados con el contenido de la página impresa ${targetPage}.`,
+      "Indica al usuario que verifique el número de página impresa (en el PDF puede diferir del número del visor).",
+      "No inventes ni uses la rúbrica de evaluación para responder.",
+    ].join("\n");
+  }
+
   const parts: string[] = [];
 
   const instructions = (config.instructions ?? "").trim();
@@ -51,7 +195,6 @@ export async function buildSystemContext(
   const reportFormat = (config.report_format ?? "").trim();
   const rubricText = (config.rubric_prompt ?? "").trim();
 
-  // Configuración actual: para que el chat responda según lo realmente configurado (instrucciones, formato, elementos).
   const elementsRaw = config.elements ?? "[]";
   let elementsList: { title?: string; description?: string; section?: string }[] = [];
   try {
@@ -80,13 +223,14 @@ export async function buildSystemContext(
           )
           .join("\n\n");
 
+  const includeFormatInSummary = !options?.excludeReportFormat;
   const configSummary = [
     "**Instrucciones de evaluación:**",
     promptForInstructions ? promptForInstructions : "Vacío. No hay instrucciones configuradas para este tipo de evaluación.",
     "",
-    "**Formato del informe:**",
-    reportFormat ? reportFormat : "Vacío. No hay formato de informe configurado.",
-    "",
+    ...(includeFormatInSummary
+      ? ["**Formato del informe:**", reportFormat ? reportFormat : "Vacío. No hay formato de informe configurado.", ""]
+      : []),
     "**Rúbrica:**",
     rubricText ? "Configurada (ver sección 'Rúbrica y criterios de evaluación' más abajo)." : "No configurada.",
     "",
@@ -98,11 +242,17 @@ export async function buildSystemContext(
 
   parts.push("## Configuración actual de este tipo de evaluación\n\n" + configSummary);
 
+  if (options?.evaluateDimension) {
+    parts.push(
+      `## Enfoque de esta evaluación parcial\n\nEvalúa ÚNICAMENTE la dimensión **${options.evaluateDimension.name}**. Fundamenta el análisis en los fragmentos del Manual de referencia (Knowledge) incluidos abajo y en los datos del proyecto.\n\n### Criterios de esta dimensión\n\n${options.evaluateDimension.content}`
+    );
+  }
+
   if (promptForInstructions) {
     parts.push("## Instrucciones de evaluación\n\n" + promptForInstructions);
   }
 
-  if (reportFormat) {
+  if (reportFormat && !options?.excludeReportFormat) {
     parts.push("## Formato del informe\n\n" + reportFormat);
   }
 
@@ -112,7 +262,15 @@ export async function buildSystemContext(
       .map((r) => `**${r.element}:**\n${r.content}`)
       .join("\n\n");
     parts.push("## Documentos del proyecto a evaluar (elementos identificados)\n\n" + tableText);
-  } else if (projectFilePaths.length > 0) {
+  }
+  if (options?.projectStructuredData?.files?.length) {
+    const summary = formatStructuredDataSummary(options.projectStructuredData, MAX_STRUCTURED_SUMMARY_CHARS);
+    parts.push(
+      "## Datos completos del documento (todas las hojas)\n\nUsa esta sección para responder preguntas sobre cualquier hoja del archivo (por ejemplo plan de actividades, Gantt, presupuesto, indicadores). Contiene el contenido de todas las hojas extraídas.\n\n" +
+        summary
+    );
+  }
+  if (!projectElementsTable?.length && !options?.projectStructuredData?.files?.length && !options?.projectElementsOnly && projectFilePaths.length > 0) {
     const projectTexts: string[] = [];
     for (const filePath of projectFilePaths) {
       if (!fs.existsSync(filePath)) continue;
@@ -133,49 +291,47 @@ export async function buildSystemContext(
     }
   }
 
-  // Solo usar rúbrica si el usuario escribió algo en el campo "Rúbrica". No cargar desde
-  // rubric_path cuando el campo está vacío, para no inyectar rúbricas residuales.
-  // Cuando no hay rúbrica configurada, indicarlo explícitamente para que el modelo no
-  // use la documentación de referencia como rúbrica ni invente criterios.
   const rubricSectionText = rubricText
     ? rubricText
     : `No hay rúbrica de evaluación configurada para este tipo de evaluación.
 
-REGLA para preguntas sobre rúbrica o criterios: Responde únicamente que no hay rúbrica definida en la configuración actual. No describas ni sugieras ninguna estructura de evaluación (no menciones dimensiones como Novedad, Impacto, Escalabilidad, Resultado Final, ni niveles 1-4, ni subdimensiones, ni ponderaciones). No pidas al usuario que proporcione o cargue una rúbrica. No uses la documentación de referencia como rúbrica. En las evaluaciones no se aplica ninguna rúbrica si no está configurada.`;
+REGLA para preguntas sobre rúbrica o criterios: Responde únicamente que no hay rúbrica definida en la configuración actual.`;
 
-  const skipKnowledge = options?.skipKnowledge === true;
+  const skipKnowledge =
+    options?.skipKnowledge === true || limits.skipKnowledge;
 
   if (!skipKnowledge && hasChunks(evaluationTypeId)) {
     try {
-      const queryText = [
-        promptForInstructions.slice(0, RAG_QUERY_PROMPT_CHARS),
-        rubricText.slice(0, RAG_QUERY_RUBRIC_CHARS),
-        "Evaluar proyecto según rúbrica y documentación de referencia.",
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .trim();
-      const chunks = await retrieveRelevantChunks(evaluationTypeId, queryText, {
-        topK: RAG_TOP_K,
-        maxRetrievedChars: RAG_MAX_RETRIEVED_CHARS,
+      const ragQuery =
+        options?.ragQuery?.trim() ||
+        buildDefaultRagQuery(promptForInstructions, rubricText);
+      const chunks = await retrieveRelevantChunks(evaluationTypeId, ragQuery, {
+        topK: limits.topK,
+        maxRetrievedChars: limits.maxRetrievedChars,
+        excludeIds: options?.excludeChunkIds,
+        pageNumber: options?.pageNumber,
       });
       if (chunks.length > 0) {
+        options?.onRetrievedChunks?.(chunks);
         const knowledgeSection =
           "## Documentación de referencia (Knowledge)\n\n" +
-          chunks
-            .map((c) => `### Documento: ${c.docName}\n\n${c.text}`)
-            .join("\n\n---\n\n");
+          "REGLA: Fundamenta tu respuesta en estos fragmentos del manual de referencia cuando sea pertinente. Cita conceptos del marco teórico cuando apliquen.\n\n" +
+          formatKnowledgeChunks(chunks);
         parts.push(knowledgeSection);
       }
     } catch {
-      /* fallback to full knowledge load below */
+      /* fallback below */
     }
   }
 
   if (!skipKnowledge && !parts.some((p) => p.startsWith("## Documentación de referencia"))) {
     const docs = await getKnowledgeDocuments(evaluationTypeId);
     if (docs.length > 0) {
-      const knowledgeTexts = docs.map((d) => `### Documento: ${d.docName}\n\n${d.text}`);
+      const maxFallback = Math.min(40_000, limits.maxRetrievedChars * 2);
+      const knowledgeTexts = docs.map((d) => {
+        const t = d.text.length > maxFallback ? d.text.slice(0, maxFallback) + "\n[…truncado]" : d.text;
+        return `### Documento: ${d.docName}\n\n${t}`;
+      });
       parts.push("## Documentación de referencia (Knowledge)\n\n" + knowledgeTexts.join("\n\n---\n\n"));
     }
   }
@@ -188,30 +344,28 @@ REGLA para preguntas sobre rúbrica o criterios: Responde únicamente que no hay
   const projectPart = parts.find((p) => p.startsWith("## Documentos del proyecto"));
   const knowledgePart = parts.find((p) => p.startsWith("## Documentación de referencia"));
   const rubricPart = parts.find((p) => p.startsWith("## Rúbrica"));
+  const focusPart = parts.find((p) => p.startsWith("## Enfoque de esta evaluación"));
 
   const otherLen =
     (promptPart?.length ?? 0) +
     (reportFormatPart?.length ?? 0) +
     (rubricPart?.length ?? 0) +
     (projectPart?.length ?? 0) +
+    (focusPart?.length ?? 0) +
     separator.length * Math.max(0, parts.length - 1);
   const truncationNotice = "\n\n[Documentación de referencia truncada por límite de longitud.]";
-  if (
-    knowledgePart &&
-    otherLen + knowledgePart.length + truncationNotice.length > MAX_SYSTEM_CONTEXT_CHARS
-  ) {
-    const maxKnowledgeLen = MAX_SYSTEM_CONTEXT_CHARS - otherLen - truncationNotice.length;
+  if (knowledgePart && otherLen + knowledgePart.length + truncationNotice.length > maxSystemChars) {
+    const maxKnowledgeLen = maxSystemChars - otherLen - truncationNotice.length;
     if (maxKnowledgeLen > 0) {
       const idx = parts.indexOf(knowledgePart);
-      parts[idx] =
-        knowledgePart.slice(0, maxKnowledgeLen) + truncationNotice;
+      parts[idx] = knowledgePart.slice(0, maxKnowledgeLen) + truncationNotice;
     }
   }
 
   let fullContext = parts.join(separator);
   const truncationSuffix = "\n\n[Contexto truncado por límite de longitud.]";
-  if (fullContext.length > MAX_SYSTEM_CONTEXT_CHARS) {
-    fullContext = fullContext.slice(0, MAX_SYSTEM_CONTEXT_CHARS - truncationSuffix.length) + truncationSuffix;
+  if (fullContext.length > maxSystemChars) {
+    fullContext = fullContext.slice(0, maxSystemChars - truncationSuffix.length) + truncationSuffix;
   }
   return fullContext;
 }

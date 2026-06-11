@@ -11,6 +11,8 @@ import { getConfig, updateConfig } from "@/lib/db";
 import { getSupportedExtensions } from "@/lib/document-parser";
 import { indexKnowledge } from "@/lib/rag-index";
 
+export const maxDuration = 300;
+
 export type KnowledgeEntry = { name: string; url: string };
 
 type UploadKind = "knowledge" | "rubric" | "project";
@@ -60,8 +62,20 @@ export async function POST(request: Request) {
         })();
         const newEntries: KnowledgeEntry[] = [...current.filter((e): e is KnowledgeEntry => typeof e === "object" && e?.name != null && e?.url != null), ...uploaded];
         await updateConfig(typeId, { knowledge_paths: newEntries });
-        indexKnowledge(typeId).catch(() => {});
-        return NextResponse.json({ saved: uploaded.map((u) => u.name), knowledge_paths: newEntries });
+        let chunkCount: number | undefined;
+        let indexError: string | undefined;
+        try {
+          const result = await indexKnowledge(typeId);
+          chunkCount = result.chunkCount;
+        } catch (e) {
+          indexError = e instanceof Error ? e.message : String(e);
+        }
+        return NextResponse.json({
+          saved: uploaded.map((u) => u.name),
+          knowledge_paths: newEntries,
+          chunkCount,
+          indexError,
+        });
       }
 
       const dir = getKnowledgeDir(typeId);
@@ -80,8 +94,15 @@ export async function POST(request: Request) {
       const currentPaths = config?.knowledge_paths ? (() => { try { return JSON.parse(config.knowledge_paths) as string[]; } catch { return []; } })() : [];
       const newPaths = [...new Set([...currentPaths, ...saved])];
       await updateConfig(typeId, { knowledge_paths: newPaths });
-      indexKnowledge(typeId).catch(() => {});
-      return NextResponse.json({ saved, knowledge_paths: newPaths });
+      let chunkCount: number | undefined;
+      let indexError: string | undefined;
+      try {
+        const result = await indexKnowledge(typeId);
+        chunkCount = result.chunkCount;
+      } catch (e) {
+        indexError = e instanceof Error ? e.message : String(e);
+      }
+      return NextResponse.json({ saved, knowledge_paths: newPaths, chunkCount, indexError });
     }
 
     if (kind === "rubric") {

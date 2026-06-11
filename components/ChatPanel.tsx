@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
+import type { ProjectStructuredData } from "@/lib/build-context";
 
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 
@@ -48,6 +49,7 @@ export default function ChatPanel({
   projectFilePaths,
   onProjectFilePathsChange,
   projectElementsTable,
+  projectStructuredData,
   sessionId,
   extractionLoading = false,
 }: {
@@ -59,6 +61,7 @@ export default function ChatPanel({
   projectFilePaths: string[];
   onProjectFilePathsChange: (paths: string[]) => void;
   projectElementsTable: { element: string; content: string }[];
+  projectStructuredData?: ProjectStructuredData;
   sessionId: string;
   extractionLoading?: boolean;
 }) {
@@ -88,6 +91,7 @@ export default function ChatPanel({
           message: text,
           projectFilePaths,
           projectElementsTable: projectElementsTable?.length ? projectElementsTable : undefined,
+          projectStructuredData: projectStructuredData ?? undefined,
           messages: messages.slice(0, -1),
         }),
         signal: controller.signal,
@@ -149,7 +153,6 @@ export default function ChatPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           evaluationTypeId: activeTypeId,
-          projectFilePaths,
           projectElementsTable: projectElementsTable?.length ? projectElementsTable : undefined,
         }),
       });
@@ -160,16 +163,65 @@ export default function ChatPanel({
       }
       const reader = res.body?.getReader();
       const decoder = new TextDecoder();
+      let buffer = "";
+      let reportContent = "";
       if (reader) {
-        let accumulated = "";
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          accumulated += decoder.decode(value, { stream: true });
-          onReportContentChange(stripThinkBlocks(accumulated));
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            try {
+              const data = JSON.parse(trimmed) as { type: string; message?: string; chunk?: string; error?: string };
+              if (data.type === "step" && typeof data.message === "string") {
+                onMessagesChange((prev) => {
+                  const next = [...prev];
+                  const last = next[next.length - 1];
+                  if (last?.role === "assistant") next[next.length - 1] = { ...last, content: data.message! };
+                  else next.push({ role: "assistant", content: data.message! });
+                  return next;
+                });
+              } else if (data.type === "content" && typeof data.chunk === "string") {
+                reportContent += data.chunk;
+                onReportContentChange(stripThinkBlocks(reportContent));
+              } else if (data.type === "done") {
+                onMessagesChange((prev) => [...prev, { role: "assistant", content: "Informe listo en el panel derecho." }]);
+              } else if (data.type === "error" && data.error) {
+                throw new Error(data.error);
+              }
+            } catch (e) {
+              if (e instanceof SyntaxError) continue;
+              throw e;
+            }
+          }
+        }
+        if (buffer.trim()) {
+          try {
+            const data = JSON.parse(buffer.trim()) as { type: string; message?: string; chunk?: string; error?: string };
+            if (data.type === "step" && typeof data.message === "string") {
+              onMessagesChange((prev) => {
+                const next = [...prev];
+                const last = next[next.length - 1];
+                if (last?.role === "assistant") next[next.length - 1] = { ...last, content: data.message! };
+                return next;
+              });
+            } else if (data.type === "content" && typeof data.chunk === "string") {
+              reportContent += data.chunk;
+              onReportContentChange(stripThinkBlocks(reportContent));
+            } else if (data.type === "done") {
+              onMessagesChange((prev) => [...prev, { role: "assistant", content: "Informe listo en el panel derecho." }]);
+            } else if (data.type === "error" && data.error) {
+              throw new Error(data.error);
+            }
+          } catch (e) {
+            if (!(e instanceof SyntaxError)) throw e;
+          }
         }
       }
-      onMessagesChange((prev) => [...prev, { role: "assistant", content: "Informe listo en el panel derecho." }]);
     } catch (e) {
       onMessagesChange((prev) => [...prev, { role: "assistant", content: `[Error: ${e instanceof Error ? e.message : String(e)}]` }]);
     } finally {

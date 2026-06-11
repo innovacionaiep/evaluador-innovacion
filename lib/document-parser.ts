@@ -7,6 +7,29 @@ async function loadPdfParse() {
   return pdfParse.default;
 }
 
+export type PdfPageText = { page: number; text: string };
+
+/** Extrae texto del PDF página por página (para metadatos RAG). Usa separadores de página (\f) de pdf-parse. */
+export async function extractPdfPages(filePath: string): Promise<PdfPageText[]> {
+  if (!fs.existsSync(filePath) || path.extname(filePath).toLowerCase() !== ".pdf") {
+    return [];
+  }
+  try {
+    const pdfParse = await loadPdfParse();
+    const dataBuffer = fs.readFileSync(filePath);
+    const data = await pdfParse(dataBuffer);
+    const raw = (data?.text ?? "").trim();
+    if (!raw) return [];
+    const parts = raw.split(/\f+/).map((p) => p.trim()).filter(Boolean);
+    if (parts.length <= 1) {
+      return [{ page: 1, text: raw }];
+    }
+    return parts.map((text, i) => ({ page: i + 1, text })).filter((p) => p.text.length > 0);
+  } catch {
+    return [];
+  }
+}
+
 export async function extractTextFromFile(filePath: string): Promise<string> {
   if (!fs.existsSync(filePath)) return "";
   const ext = path.extname(filePath).toLowerCase();

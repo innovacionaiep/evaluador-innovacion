@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
 import { getEvaluationTypeById } from "@/lib/db";
-import { indexKnowledge } from "@/lib/rag-index";
+import { getRagStatus } from "@/lib/rag-status";
 
-export const maxDuration = 300;
-
-export async function POST(
+export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -17,8 +15,8 @@ export async function POST(
     if (!type) {
       return NextResponse.json({ error: "Evaluation type not found" }, { status: 404 });
     }
-    const { chunkCount } = await indexKnowledge(id);
-    return NextResponse.json({ ok: true, chunkCount });
+    const status = getRagStatus(id);
+    return NextResponse.json(status);
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }

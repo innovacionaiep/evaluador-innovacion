@@ -32,7 +32,7 @@ function cellToStr(c: unknown): string {
 
 /**
  * Extracts Excel (.xlsx) to a structured JSON with cell coordinates and merge ranges.
- * Only the first sheet is processed (same as extractTextFromFile). For .xls, falls back to empty structure.
+ * All worksheets in the workbook are included. For .xls, falls back to empty structure.
  */
 export async function extractExcelToStructuredJson(filePath: string): Promise<ExcelStructuredData> {
   if (!fs.existsSync(filePath)) {
@@ -59,7 +59,7 @@ export async function extractExcelToStructuredJson(filePath: string): Promise<Ex
   const workbook = new Workbook();
   await workbook.xlsx.readFile(filePath);
   const sheets: ExcelSheet[] = [];
-  const sheetsToUse = workbook.worksheets.slice(0, 1);
+  const sheetsToUse = workbook.worksheets;
   for (const sheet of sheetsToUse) {
     const cells: ExcelCell[] = [];
     sheet.eachRow({ includeEmpty: true }, (row) => {

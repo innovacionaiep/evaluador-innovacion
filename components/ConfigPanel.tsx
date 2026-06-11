@@ -46,6 +46,30 @@ export default function ConfigPanel({
   const [newTypeName, setNewTypeName] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [indexingKnowledge, setIndexingKnowledge] = useState(false);
+  const [knowledgeIndexStatus, setKnowledgeIndexStatus] = useState<string | null>(null);
+  const [ragStatus, setRagStatus] = useState<{
+    hasIndex: boolean;
+    chunkCount: number;
+    indexedAt: string | null;
+    chunksFileBytes: number;
+  } | null>(null);
+
+  const refreshRagStatus = (typeId: number) => {
+    fetch(`/api/config/${typeId}/rag-status`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (typeof data?.chunkCount === "number") {
+          setRagStatus({
+            hasIndex: !!data.hasIndex,
+            chunkCount: data.chunkCount,
+            indexedAt: data.indexedAt ?? null,
+            chunksFileBytes: data.chunksFileBytes ?? 0,
+          });
+        }
+      })
+      .catch(() => setRagStatus(null));
+  };
   const [showElementModal, setShowElementModal] = useState(false);
   const [editingElementIndex, setEditingElementIndex] = useState<number | null>(null);
   const [elementForm, setElementForm] = useState({ title: "", description: "", section: "General" });
@@ -100,6 +124,7 @@ export default function ConfigPanel({
       })
       .catch(() => setConfig(defaultConfig))
       .finally(() => setLoading(false));
+    refreshRagStatus(selectedTypeId);
   }, [selectedTypeId]);
 
   const handleCreateType = async () => {
@@ -155,20 +180,87 @@ export default function ConfigPanel({
     }
   };
 
+  const formatIndexStatus = (chunkCount?: number, indexError?: string) => {
+    if (indexError) return `Error al indexar: ${indexError}`;
+    if (chunkCount != null && chunkCount > 0) return `Índice RAG generado: ${chunkCount} fragmentos.`;
+    if (chunkCount === 0) return "Índice RAG vacío (no se extrajo texto del documento).";
+    return null;
+  };
+
   const handleUploadKnowledge = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files?.length || !selectedTypeId) return;
+    setIndexingKnowledge(true);
+    setKnowledgeIndexStatus("Subiendo e indexando documento…");
     const form = new FormData();
     form.set("kind", "knowledge");
     form.set("evaluationTypeId", String(selectedTypeId));
     for (let i = 0; i < files.length; i++) form.append("files", files[i]);
-    const res = await fetch("/api/upload", { method: "POST", body: form });
-    if (res.ok) {
-      const data = await res.json();
+    try {
+      const res = await fetch("/api/upload", { method: "POST", body: form });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Error al subir");
+      }
       setConfig((c) => ({ ...c, knowledge_paths: data.knowledge_paths ?? c.knowledge_paths }));
       onTypesChange();
+      setKnowledgeIndexStatus(formatIndexStatus(data.chunkCount, data.indexError));
+      if (selectedTypeId) refreshRagStatus(selectedTypeId);
+    } catch (err) {
+      setKnowledgeIndexStatus(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIndexingKnowledge(false);
+      e.target.value = "";
     }
-    e.target.value = "";
+  };
+
+  const handleRemoveKnowledge = async (index: number) => {
+    if (!selectedTypeId) return;
+    const item = config.knowledge_paths[index];
+    const name = typeof item === "string" ? item : item?.name ?? "documento";
+    if (!confirm(`¿Eliminar "${name}" de la base de conocimiento?`)) return;
+    const newPaths = config.knowledge_paths.filter((_, i) => i !== index);
+    setIndexingKnowledge(true);
+    setKnowledgeIndexStatus("Eliminando e actualizando índice RAG…");
+    try {
+      const res = await fetch(`/api/config/${selectedTypeId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ knowledge_paths: newPaths }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Error al eliminar");
+      setConfig((c) => ({ ...c, knowledge_paths: newPaths }));
+      setKnowledgeIndexStatus(formatIndexStatus(data.chunkCount, data.indexError) ?? "Documento eliminado.");
+      refreshRagStatus(selectedTypeId);
+    } catch (err) {
+      setKnowledgeIndexStatus(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIndexingKnowledge(false);
+    }
+  };
+
+  const handleReindexKnowledge = async () => {
+    if (!selectedTypeId) return;
+    setIndexingKnowledge(true);
+    setKnowledgeIndexStatus("Regenerando índice RAG…");
+    try {
+      const res = await fetch(`/api/config/${selectedTypeId}/reindex`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Error al reindexar");
+      setKnowledgeIndexStatus(formatIndexStatus(data.chunkCount) ?? "Índice actualizado.");
+      refreshRagStatus(selectedTypeId);
+    } catch (err) {
+      setKnowledgeIndexStatus(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIndexingKnowledge(false);
+    }
+  };
+
+  const formatBytes = (n: number) => {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   };
 
   const existingSections = Array.from(
@@ -402,21 +494,65 @@ export default function ConfigPanel({
                 className="sr-only"
                 onChange={handleUploadKnowledge}
               />
-              <button
-                type="button"
-                onClick={() => knowledgeInputRef.current?.click()}
-                className="mt-3 flex shrink-0 w-full items-center justify-center gap-2 rounded-lg border-2 border-dashed border-gray-300 bg-white py-4 text-sm font-medium text-gray-700 transition hover:border-gray-400 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500 dark:hover:bg-gray-700"
-              >
-                <svg className="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                </svg>
-                Subir documentos de referencia
-              </button>
+              <div className="mt-3 flex shrink-0 flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => knowledgeInputRef.current?.click()}
+                  disabled={indexingKnowledge}
+                  className="flex min-w-0 flex-1 items-center justify-center gap-2 rounded-lg border-2 border-dashed border-gray-300 bg-white py-3 text-sm font-medium text-gray-700 transition hover:border-gray-400 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500 dark:hover:bg-gray-700"
+                >
+                  <svg className="h-5 w-5 shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  </svg>
+                  {indexingKnowledge ? "Indexando…" : "Subir documentos"}
+                </button>
+                {config.knowledge_paths.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleReindexKnowledge}
+                    disabled={indexingKnowledge}
+                    className="shrink-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                  >
+                    Reindexar RAG
+                  </button>
+                )}
+              </div>
+              {ragStatus && (
+                <p className="mt-2 shrink-0 text-xs text-gray-500 dark:text-gray-400">
+                  Índice RAG:{" "}
+                  {ragStatus.hasIndex
+                    ? `${ragStatus.chunkCount} fragmentos · ${formatBytes(ragStatus.chunksFileBytes)}${
+                        ragStatus.indexedAt
+                          ? ` · ${new Date(ragStatus.indexedAt).toLocaleString("es-CL")}`
+                          : ""
+                      }`
+                    : "sin indexar (pulse Reindexar RAG tras subir documentos)"}
+                </p>
+              )}
+              {knowledgeIndexStatus && (
+                <p className={`mt-1 shrink-0 text-xs ${knowledgeIndexStatus.startsWith("Error") || knowledgeIndexStatus.includes("Error al indexar") ? "text-red-600 dark:text-red-400" : "text-emerald-700 dark:text-emerald-400"}`}>
+                  {knowledgeIndexStatus}
+                </p>
+              )}
               {config.knowledge_paths.length > 0 && (
-                <ul className="mt-2 min-h-0 flex-1 space-y-0.5 overflow-y-auto rounded bg-gray-100 px-2 py-2 text-xs text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                <ul className="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto rounded bg-gray-100 px-2 py-2 text-xs text-gray-600 dark:bg-gray-700 dark:text-gray-300">
                   <span className="font-medium">Archivos cargados:</span>
                   {config.knowledge_paths.map((p, i) => (
-                    <li key={i} className="truncate pl-1">{typeof p === "string" ? p : p.name}</li>
+                    <li key={i} className="flex items-center justify-between gap-2 pl-1">
+                      <span className="min-w-0 truncate">{typeof p === "string" ? p : p.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveKnowledge(i)}
+                        disabled={indexingKnowledge}
+                        className="shrink-0 rounded px-1.5 py-0.5 text-gray-400 hover:bg-red-100 hover:text-red-700 disabled:opacity-50 dark:hover:bg-red-900/30 dark:hover:text-red-400"
+                        title="Eliminar documento"
+                        aria-label="Eliminar documento"
+                      >
+                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </li>
                   ))}
                 </ul>
               )}
