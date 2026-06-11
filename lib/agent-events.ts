@@ -13,7 +13,10 @@ export type AgentChunkPreview = {
 /** Eventos de streaming del chat (NDJSON, una línea por evento). */
 export type ChatStreamEvent =
   | { type: "step"; message: string; phase?: string }
+  | { type: "plan"; agentLevel: string; complexity: string; intent: string; label: string; sources: string[]; excludeSources: string[]; reasoning: string; summary: string }
   | { type: "intent"; intent: string; contextMode: string; label: string }
+  | { type: "tool_call"; tool: string; arguments: Record<string, unknown> }
+  | { type: "tool_result"; tool: string; summary: string }
   | { type: "rag_query"; query: string; queries?: string[] }
   | { type: "chunks"; count: number; totalChars: number; chunks: AgentChunkPreview[] }
   | { type: "chunks_empty"; message: string }
@@ -64,7 +67,7 @@ export const INTENT_LABELS: Record<string, string> = {
 
 export type AgentTraceEntry = {
   id: string;
-  kind: "step" | "intent" | "rag" | "chunks" | "context" | "thinking" | "answer";
+  kind: "step" | "plan" | "intent" | "tool" | "rag" | "chunks" | "context" | "thinking" | "answer";
   title: string;
   detail?: string;
   chunks?: AgentChunkPreview[];

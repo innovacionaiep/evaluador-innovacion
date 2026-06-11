@@ -1,0 +1,274 @@
+import { getConfig } from "@/lib/db";
+import { buildSystemContext, type ProjectStructuredData } from "@/lib/build-context";
+import { streamChatDetailed, chatCompletionWithTools } from "@/lib/openrouter";
+import { routeContextPlan, planSourcesSummary } from "@/lib/context-router";
+import type { ContextPlan } from "@/lib/context-plan";
+import type { ChatStreamEvent } from "@/lib/agent-events";
+import { hasActiveKnowledgeIndex, isKnowledgeConfigured } from "@/lib/knowledge-config";
+import {
+  AGENT_TOOL_DEFINITIONS,
+  createEmptyArtifacts,
+  executeAgentTool,
+  runPlannedTools,
+  type AgentArtifacts,
+  type AgentToolContext,
+} from "@/lib/agent-tools";
+
+export type ChatAgentInput = {
+  evaluationTypeId: number;
+  message: string;
+  projectFilePaths: string[];
+  projectElementsTable?: { element: string; content: string }[];
+  projectStructuredData?: ProjectStructuredData;
+  history: { role: "user" | "assistant"; content: string }[];
+};
+
+const MAX_ITER_B = 4;
+const MAX_ITER_C = 8;
+
+const TOOL_LOOP_SYSTEM = `Eres un agente recopilador de contexto para un evaluador de proyectos de innovación.
+Llama herramientas para reunir información. Cuando tengas suficiente, responde con un mensaje que empiece por LISTO: y un breve resumen.
+No respondas a la pregunta del usuario todavía.`;
+
+function buildResponseRules(plan: ContextPlan, hasRubric: boolean): string {
+  const parts: string[] = [...plan.responseRules];
+  if (!hasRubric && plan.sources.includes("rubric")) {
+    parts.push(
+      "No hay rúbrica configurada. Si preguntan por criterios de evaluación, indícalo."
+    );
+  }
+  return parts.map((r) => r.trim()).filter(Boolean).join("\n\n");
+}
+
+async function* runToolLoop(
+  plan: ContextPlan,
+  input: ChatAgentInput,
+  artifacts: AgentArtifacts
+): AsyncGenerator<ChatStreamEvent> {
+  const maxIter = plan.agentLevel === "C" ? MAX_ITER_C : MAX_ITER_B;
+  const ctx: AgentToolContext = {
+    evaluationTypeId: input.evaluationTypeId,
+    plan,
+    projectElementsTable: input.projectElementsTable,
+    projectStructuredData: input.projectStructuredData,
+  };
+
+  yield {
+    type: "step",
+    phase: "agent",
+    message: `Agente nivel ${plan.agentLevel}: recopilación con herramientas (hasta ${maxIter} pasos)…`,
+  };
+
+  const messages: Parameters<typeof chatCompletionWithTools>[0] = [
+    { role: "system", content: TOOL_LOOP_SYSTEM },
+    {
+      role: "user",
+      content: `Pregunta: ${input.message}\n\nPlan:\n${planSourcesSummary(plan)}\n\nHerramientas sugeridas: ${plan.toolsHint.join(", ") || "las necesarias"}`,
+    },
+  ];
+
+  let usedNativeTools = false;
+
+  for (let i = 0; i < maxIter; i++) {
+    yield {
+      type: "step",
+      phase: "agent",
+      message: `Agente nivel ${plan.agentLevel}: iteración ${i + 1}/${maxIter}…`,
+    };
+
+    try {
+      const { content, toolCalls } = await chatCompletionWithTools(
+        messages,
+        AGENT_TOOL_DEFINITIONS,
+        { max_tokens: 1024, temperature: 0.2 }
+      );
+
+      if (toolCalls.length > 0) {
+        usedNativeTools = true;
+        messages.push({
+          role: "assistant",
+          content: content ?? null,
+          tool_calls: toolCalls.map((tc) => ({
+            id: tc.id,
+            type: "function" as const,
+            function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+          })),
+        });
+
+        for (const tc of toolCalls) {
+          yield { type: "tool_call", tool: tc.name, arguments: tc.arguments };
+          const result = await executeAgentTool(tc.name, tc.arguments, ctx, artifacts);
+          yield { type: "tool_result", tool: tc.name, summary: result.summary };
+          messages.push({ role: "tool", tool_call_id: tc.id, content: result.summary });
+        }
+        continue;
+      }
+
+      if (content?.trim().toUpperCase().startsWith("LISTO:")) {
+        yield {
+          type: "step",
+          phase: "agent",
+          message: content.trim().slice(0, 220),
+        };
+        break;
+      }
+
+      if (plan.agentLevel === "C" && i < maxIter - 1) {
+        messages.push({ role: "assistant", content: content ?? "Continuando." });
+        messages.push({
+          role: "user",
+          content:
+            "Si falta información, llama más herramientas. Si es suficiente, responde LISTO: con resumen.",
+        });
+        continue;
+      }
+      break;
+    } catch {
+      break;
+    }
+  }
+
+  if (!usedNativeTools || artifacts.toolLog.length === 0) {
+    yield {
+      type: "step",
+      phase: "agent",
+      message: "Ejecutando herramientas del plan (respaldo)…",
+    };
+    const before = artifacts.toolLog.length;
+    await runPlannedTools(ctx, artifacts);
+    for (const entry of artifacts.toolLog.slice(before)) {
+      yield { type: "tool_result", tool: entry.tool, summary: entry.summary };
+    }
+  }
+}
+
+export async function* runChatAgent(input: ChatAgentInput): AsyncGenerator<ChatStreamEvent> {
+  const config = await getConfig(input.evaluationTypeId);
+  const hasRubric = !!((config?.rubric_prompt ?? "").trim());
+  const hasInstructions = !!((config?.instructions ?? "").trim() || (config?.prompt ?? "").trim());
+  const hasProjectData = !!(
+    input.projectElementsTable?.length || input.projectStructuredData?.files?.length
+  );
+  const hasKnowledge =
+    (await isKnowledgeConfigured(input.evaluationTypeId)) &&
+    (await hasActiveKnowledgeIndex(input.evaluationTypeId));
+
+  yield {
+    type: "step",
+    phase: "intent",
+    message: "Agente planificador (Nivel A): analizando la pregunta…",
+  };
+
+  const plan = await routeContextPlan({
+    message: input.message,
+    hasProjectData,
+    hasRubric,
+    hasInstructions,
+    hasKnowledge,
+  });
+
+  yield {
+    type: "plan",
+    agentLevel: plan.agentLevel,
+    complexity: plan.complexity,
+    intent: plan.intent,
+    label: plan.intentLabel,
+    sources: plan.sources,
+    excludeSources: plan.excludeSources,
+    reasoning: plan.reasoning,
+    summary: planSourcesSummary(plan),
+  };
+
+  yield {
+    type: "intent",
+    intent: plan.intent,
+    contextMode: plan.ragMode,
+    label: plan.intentLabel,
+  };
+
+  const artifacts = createEmptyArtifacts();
+
+  if (plan.useToolLoop && (plan.agentLevel === "B" || plan.agentLevel === "C")) {
+    yield* runToolLoop(plan, input, artifacts);
+  }
+
+  const skipKnowledgeInBuild =
+    !plan.sources.includes("knowledge_rag") ||
+    (artifacts.knowledgeChunks.length > 0 &&
+      plan.useToolLoop &&
+      !plan.comparisonMode);
+
+  const contextEvents: ChatStreamEvent[] = [];
+  const systemContent = await buildSystemContext(input.evaluationTypeId, input.projectFilePaths, {
+    projectElementsTable: input.projectElementsTable?.length
+      ? input.projectElementsTable
+      : undefined,
+    projectStructuredData: input.projectStructuredData,
+    skipKnowledge: skipKnowledgeInBuild,
+    projectElementsOnly: true,
+    contextMode: plan.ragMode,
+    ragQuery: plan.ragQuery || input.message,
+    pageNumber: plan.pageNumber,
+    chapterNumber: plan.comparisonMode ? undefined : plan.chapterNumber,
+    chapterNumbers: plan.chapterNumbers,
+    contextPlan: plan,
+    agentArtifacts: artifacts,
+    onStreamEvent: (event) => contextEvents.push(event),
+  });
+
+  for (const e of contextEvents) yield e;
+
+  const languageInstruction =
+    "Responde siempre en español. Todas tus respuestas deben estar escritas íntegramente en español.\n\n";
+  const baseInstruction =
+    "Eres un asistente experto en evaluación de proyectos. Responde con claridad y basándote solo en el contexto proporcionado.\n\nREGLA OBLIGATORIA para objetivos: Si preguntan por el objetivo general o los objetivos específicos del proyecto, cita ÚNICAMENTE el texto de la sección del proyecto. No parafrasees.\n\nNo uses nunca las etiquetas <think> ni </think> en tus respuestas.";
+  const rulesBlock = buildResponseRules(plan, hasRubric);
+  const systemMessage =
+    (rulesBlock ? `REGLAS DE RESPUESTA:\n${rulesBlock}\n\n---\n\n` : "") +
+    languageInstruction +
+    (systemContent || baseInstruction);
+
+  const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
+    { role: "system", content: systemMessage },
+    ...input.history.map((m) => ({
+      role: m.role as "user" | "assistant",
+      content: m.content,
+    })),
+    { role: "user", content: input.message },
+  ];
+
+  yield {
+    type: "step",
+    phase: "llm",
+    message: "Generando respuesta con el modelo de lenguaje…",
+  };
+
+  let hasThinking = false;
+  let hasContent = false;
+
+  for await (const part of streamChatDetailed(messages)) {
+    if (part.kind === "thinking") {
+      if (!hasThinking) {
+        yield {
+          type: "step",
+          phase: "thinking",
+          message: "El modelo está razonando antes de responder…",
+        };
+        hasThinking = true;
+      }
+      yield { type: "thinking", chunk: part.text };
+    } else {
+      if (!hasContent && part.text.trim()) {
+        yield {
+          type: "step",
+          phase: "answer",
+          message: "Redactando la respuesta final…",
+        };
+        hasContent = true;
+      }
+      yield { type: "content", chunk: part.text };
+    }
+  }
+
+  yield { type: "done" };
+}

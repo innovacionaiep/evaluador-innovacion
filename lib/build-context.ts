@@ -9,7 +9,10 @@ import {
 } from "@/lib/rag-retrieve";
 import { buildKnowledgeRagQueries } from "@/lib/rag-query-expand";
 import { retrieveChunksForPrintedPage } from "@/lib/page-lookup";
-import { getChapterContextForEvaluation } from "@/lib/chapter-lookup";
+import {
+  getChapterContextForEvaluation,
+  buildMultiChapterComparisonContext,
+} from "@/lib/chapter-lookup";
 import {
   CONTEXT_LIMITS,
   RAG_QUERY_PROMPT_CHARS,
@@ -17,6 +20,8 @@ import {
   type ContextMode,
 } from "@/lib/rag-limits";
 import { summarizeChunks, type BuildContextStreamEvent } from "@/lib/agent-events";
+import { includesSource, type ContextPlan } from "@/lib/context-plan";
+import type { AgentArtifacts } from "@/lib/agent-tools";
 import path from "path";
 import fs from "fs";
 
@@ -76,12 +81,17 @@ export type BuildSystemContextOptions = {
   excludeChunkIds?: Set<string>;
   pageNumber?: number;
   chapterNumber?: number;
+  chapterNumbers?: number[];
   /** En evaluación multi-dimensión: enfoque en una sola dimensión. */
   evaluateDimension?: { name: string; content: string };
   /** Callback con chunks recuperados (p. ej. deduplicación en evaluación). */
   onRetrievedChunks?: (chunks: RetrievedChunk[]) => void;
   /** Emite pasos observables durante la construcción del contexto (chat). */
   onStreamEvent?: (event: BuildContextStreamEvent) => void;
+  /** Plan del agente (chat): qué secciones incluir en el prompt. */
+  contextPlan?: ContextPlan;
+  /** Datos recopilados por herramientas del agente (Nivel B/C). */
+  agentArtifacts?: AgentArtifacts;
 };
 
 function buildDefaultRagQuery(
@@ -164,13 +174,64 @@ export async function buildSystemContext(
     !options?.skipKnowledge &&
     (mode === "chat-knowledge" || mode === "chat-project" || mode === "chat-chapter");
 
+  const comparisonChapters =
+    options?.contextPlan?.chapterNumbers ??
+    (options?.chapterNumbers && options.chapterNumbers.length >= 2
+      ? options.chapterNumbers
+      : undefined);
+  const comparisonMode =
+    options?.contextPlan?.comparisonMode === true ||
+    (comparisonChapters != null && comparisonChapters.length >= 2);
+
   const chapterLookup =
+    !comparisonMode &&
     options?.chapterNumber != null &&
     options?.pageNumber == null &&
     !options?.skipKnowledge &&
     (mode === "chat-chapter" || mode === "chat-knowledge" || mode === "chat-project");
 
-  // Modo capítulo: fragmentos contiguos del capítulo (sin rúbrica ni instrucciones).
+  // Comparación multi-capítulo (p. ej. cap. 2 definición vs cap. 4 medición).
+  if (comparisonMode && comparisonChapters && comparisonChapters.length >= 2 && knowledgeIndexReady) {
+    const chLabel = comparisonChapters.join(" y ");
+    emitContextEvent(options, {
+      type: "step",
+      phase: "rag",
+      message: `Recuperando fragmentos de los capítulos ${chLabel} para comparación…`,
+    });
+    const multi = await buildMultiChapterComparisonContext(
+      evaluationTypeId,
+      comparisonChapters,
+      limits.maxRetrievedChars
+    );
+    if (multi && multi.chunks.length > 0) {
+      options?.onRetrievedChunks?.(multi.chunks);
+      const { previews, totalChars } = summarizeChunks(multi.chunks);
+      emitContextEvent(options, {
+        type: "chunks",
+        count: multi.chunks.length,
+        totalChars,
+        chunks: previews,
+      });
+      emitContextEvent(options, {
+        type: "context_section",
+        section: `Capítulos ${chLabel}`,
+        detail: `${multi.chunks.length} fragmento(s) para comparación (${totalChars.toLocaleString("es")} caracteres)`,
+      });
+      return multi.text;
+    }
+    emitContextEvent(options, {
+      type: "chunks_empty",
+      message: `No se encontraron fragmentos de los capítulos ${chLabel}.`,
+    });
+    return [
+      `## Comparación de capítulos ${chLabel}`,
+      "",
+      "No se encontraron fragmentos indexados de esos capítulos.",
+      "Indica al usuario que verifique los números e intente reindexar el Knowledge.",
+    ].join("\n");
+  }
+
+  // Modo capítulo único: fragmentos contiguos (resumen por secciones del índice).
   if (chapterLookup && knowledgeIndexReady) {
     const targetChapter = options!.chapterNumber!;
     emitContextEvent(options, {
@@ -323,12 +384,22 @@ export async function buildSystemContext(
     "REGLA: Si el usuario pregunta por las instrucciones, el formato del informe o los elementos a identificar, responde ÚNICAMENTE con lo indicado en esta sección. No confundas instrucciones con rúbrica. No inventes pasos, secciones (A,B,C,D), subdimensiones ni criterios a partir del manual de referencia.",
   ].join("\n");
 
-  parts.push("## Configuración actual de este tipo de evaluación\n\n" + configSummary);
-  emitContextEvent(options, {
-    type: "context_section",
-    section: "Configuración",
-    detail: "Instrucciones, formato, elementos y estado de la rúbrica",
-  });
+  const plan = options?.contextPlan;
+
+  if (!plan || includesSource(plan, "config_summary")) {
+    parts.push("## Configuración actual de este tipo de evaluación\n\n" + configSummary);
+    emitContextEvent(options, {
+      type: "context_section",
+      section: "Configuración",
+      detail: "Instrucciones, formato, elementos y estado de la rúbrica",
+    });
+  } else {
+    emitContextEvent(options, {
+      type: "context_section",
+      section: "Configuración",
+      detail: "Omitida por decisión del agente planificador",
+    });
+  }
 
   if (options?.evaluateDimension) {
     parts.push(
@@ -336,16 +407,28 @@ export async function buildSystemContext(
     );
   }
 
-  if (promptForInstructions) {
+  if (promptForInstructions && (!plan || includesSource(plan, "instructions"))) {
     parts.push("## Instrucciones de evaluación\n\n" + promptForInstructions);
   }
 
-  if (reportFormat && !options?.excludeReportFormat) {
+  if (
+    reportFormat &&
+    !options?.excludeReportFormat &&
+    (!plan || includesSource(plan, "report_format"))
+  ) {
     parts.push("## Formato del informe\n\n" + reportFormat);
   }
 
-  const projectElementsTable = options?.projectElementsTable;
-  if (projectElementsTable && projectElementsTable.length > 0) {
+  const artifactProject = options?.agentArtifacts?.projectElements ?? [];
+  const projectElementsTable =
+    artifactProject.length > 0
+      ? artifactProject
+      : options?.projectElementsTable;
+  if (
+    projectElementsTable &&
+    projectElementsTable.length > 0 &&
+    (!plan || includesSource(plan, "project"))
+  ) {
     const tableText = projectElementsTable
       .map((r) => `**${r.element}:**\n${r.content}`)
       .join("\n\n");
@@ -356,7 +439,10 @@ export async function buildSystemContext(
       detail: `${projectElementsTable.length} elemento(s) identificado(s) del proyecto`,
     });
   }
-  if (options?.projectStructuredData?.files?.length) {
+  if (
+    options?.projectStructuredData?.files?.length &&
+    (!plan || includesSource(plan, "project_structured"))
+  ) {
     const summary = formatStructuredDataSummary(options.projectStructuredData, MAX_STRUCTURED_SUMMARY_CHARS);
     parts.push(
       "## Datos completos del documento (todas las hojas)\n\nUsa esta sección para responder preguntas sobre cualquier hoja del archivo (por ejemplo plan de actividades, Gantt, presupuesto, indicadores). Contiene el contenido de todas las hojas extraídas.\n\n" +
@@ -400,9 +486,32 @@ export async function buildSystemContext(
 REGLA para preguntas sobre rúbrica o criterios: Responde únicamente que no hay rúbrica definida en la configuración actual.`;
 
   const skipKnowledge =
-    options?.skipKnowledge === true || limits.skipKnowledge;
+    options?.skipKnowledge === true ||
+    limits.skipKnowledge ||
+    (plan != null && !includesSource(plan, "knowledge_rag"));
 
-  if (!skipKnowledge && knowledgeIndexReady) {
+  const artifactChunks = options?.agentArtifacts?.knowledgeChunks ?? [];
+  if (artifactChunks.length > 0) {
+    const { previews, totalChars } = summarizeChunks(artifactChunks);
+    emitContextEvent(options, {
+      type: "chunks",
+      count: artifactChunks.length,
+      totalChars,
+      chunks: previews,
+    });
+    emitContextEvent(options, {
+      type: "context_section",
+      section: "Knowledge (agente)",
+      detail: `${artifactChunks.length} fragmento(s) recopilados por herramientas del agente`,
+    });
+    parts.push(
+      "## Documentación de referencia (Knowledge)\n\n" +
+        "REGLA: Fundamenta la respuesta en estos fragmentos recopilados por el agente.\n\n" +
+        formatKnowledgeChunks(artifactChunks)
+    );
+  }
+
+  if (!skipKnowledge && knowledgeIndexReady && artifactChunks.length === 0) {
     try {
       const ragQuery =
         options?.ragQuery?.trim() ||
@@ -505,12 +614,37 @@ REGLA para preguntas sobre rúbrica o criterios: Responde únicamente que no hay
     }
   }
 
-  parts.push("## Rúbrica y criterios de evaluación\n\n" + rubricSectionText);
-  emitContextEvent(options, {
-    type: "context_section",
-    section: "Rúbrica",
-    detail: rubricText ? "Rúbrica configurada incluida en el contexto" : "Sin rúbrica configurada",
-  });
+  const rubricFromArtifacts = options?.agentArtifacts?.rubricText?.trim();
+  const rubricBody = rubricFromArtifacts || rubricSectionText;
+  const includeRubric = !plan || includesSource(plan, "rubric");
+
+  if (includeRubric) {
+    parts.push("## Rúbrica y criterios de evaluación\n\n" + rubricBody);
+    emitContextEvent(options, {
+      type: "context_section",
+      section: "Rúbrica",
+      detail: rubricBody.includes("No hay rúbrica")
+        ? "Sin rúbrica configurada"
+        : rubricFromArtifacts
+          ? "Rúbrica recopilada por herramienta del agente"
+          : "Rúbrica configurada incluida en el contexto",
+    });
+  } else {
+    emitContextEvent(options, {
+      type: "context_section",
+      section: "Rúbrica",
+      detail: "Omitida por decisión del agente planificador",
+    });
+  }
+
+  const configArtifacts = options?.agentArtifacts?.configSections ?? {};
+  const configArtifactKeys = Object.keys(configArtifacts);
+  if (configArtifactKeys.length > 0) {
+    const lines = configArtifactKeys.map(
+      (k) => `### ${k}\n\n${configArtifacts[k]}`
+    );
+    parts.push("## Configuración (recopilada por agente)\n\n" + lines.join("\n\n"));
+  }
 
   const separator = "\n\n---\n\n";
   const promptPart = parts.find((p) => p.startsWith("## Instrucciones de evaluación"));

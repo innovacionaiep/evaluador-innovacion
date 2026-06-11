@@ -7,7 +7,9 @@ export type { AgentTraceEntry };
 
 const KIND_STYLES: Record<AgentTraceEntry["kind"], string> = {
   step: "text-gray-600 dark:text-gray-400",
+  plan: "text-indigo-600 dark:text-indigo-400",
   intent: "text-violet-600 dark:text-violet-400",
+  tool: "text-cyan-600 dark:text-cyan-400",
   rag: "text-blue-600 dark:text-blue-400",
   chunks: "text-emerald-600 dark:text-emerald-400",
   context: "text-amber-600 dark:text-amber-400",
@@ -17,7 +19,9 @@ const KIND_STYLES: Record<AgentTraceEntry["kind"], string> = {
 
 const KIND_ICONS: Record<AgentTraceEntry["kind"], string> = {
   step: "◎",
+  plan: "◆",
   intent: "◈",
+  tool: "⚙",
   rag: "⌕",
   chunks: "▤",
   context: "▣",

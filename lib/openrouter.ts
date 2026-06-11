@@ -287,7 +287,7 @@ export async function chatCompletionVision(
 /** One-shot text completion (no stream, no vision). For structuring text. */
 export async function chatCompletion(
   messages: { role: "system" | "user" | "assistant"; content: string }[],
-  options?: { max_tokens?: number; model?: string }
+  options?: { max_tokens?: number; model?: string; temperature?: number }
 ): Promise<string> {
   const apiKey = getApiKey();
   const model = options?.model ?? process.env.OPENROUTER_MODEL ?? DEFAULT_MODEL;
@@ -304,6 +304,7 @@ export async function chatCompletion(
           messages,
           stream: false,
           max_tokens: maxTokens,
+          temperature: options?.temperature ?? 0.3,
         }),
       });
       if (!res.ok) {
@@ -313,6 +314,101 @@ export async function chatCompletion(
       const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
       const content = data.choices?.[0]?.message?.content;
       return typeof content === "string" ? content : "";
+    } catch (e) {
+      lastErr = e;
+      if (!isRetryableProviderError(e) || attempt === MAX_LLM_RETRIES) throw e;
+      await sleep(RETRY_BASE_MS * Math.pow(2, attempt - 1));
+    }
+  }
+  throw lastErr;
+}
+
+export type OpenAIToolDef = {
+  type: "function";
+  function: {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  };
+};
+
+export type ToolCallResult = {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+};
+
+type ToolCompletionMessage = {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string | null;
+  tool_calls?: Array<{
+    id: string;
+    type: "function";
+    function: { name: string; arguments: string };
+  }>;
+  tool_call_id?: string;
+};
+
+function parseToolArguments(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Completion con function calling (bucle agente Nivel B/C). */
+export async function chatCompletionWithTools(
+  messages: ToolCompletionMessage[],
+  tools: OpenAIToolDef[],
+  options?: { max_tokens?: number; temperature?: number; model?: string }
+): Promise<{ content: string | null; toolCalls: ToolCallResult[] }> {
+  const apiKey = getApiKey();
+  const model = options?.model ?? process.env.OPENROUTER_MODEL ?? DEFAULT_MODEL;
+  const maxTokens = options?.max_tokens ?? 2048;
+  const temperature = options?.temperature ?? 0.2;
+
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_LLM_RETRIES; attempt++) {
+    try {
+      const res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+        method: "POST",
+        headers: openRouterHeaders(apiKey),
+        body: JSON.stringify({
+          model,
+          messages,
+          tools,
+          tool_choice: "auto",
+          stream: false,
+          max_tokens: maxTokens,
+          temperature,
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.text();
+        throw new Error(`${res.status} ${errBody}`);
+      }
+      const data = (await res.json()) as {
+        choices?: Array<{
+          message?: {
+            content?: string | null;
+            tool_calls?: Array<{
+              id: string;
+              type: "function";
+              function: { name: string; arguments: string };
+            }>;
+          };
+        }>;
+      };
+      const message = data.choices?.[0]?.message;
+      const content = message?.content ?? null;
+      const toolCalls: ToolCallResult[] = (message?.tool_calls ?? []).map((tc) => ({
+        id: tc.id,
+        name: tc.function.name,
+        arguments: parseToolArguments(tc.function.arguments),
+      }));
+      return { content, toolCalls };
     } catch (e) {
       lastErr = e;
       if (!isRetryableProviderError(e) || attempt === MAX_LLM_RETRIES) throw e;

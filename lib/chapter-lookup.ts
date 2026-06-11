@@ -282,3 +282,56 @@ export async function getChapterContextForEvaluation(
   const rules = buildChapterContextRules(chapterNum, outline);
   return { chunks, outline, rules };
 }
+
+/**
+ * Varios capítulos para preguntas de comparación (no aplica reglas de resumen de un solo capítulo).
+ */
+export async function buildMultiChapterComparisonContext(
+  evaluationTypeId: number,
+  chapterNums: number[],
+  maxCharsTotal: number
+): Promise<{ chunks: PageChunk[]; text: string } | null> {
+  const unique = [...new Set(chapterNums)].filter((n) => n >= 1).sort((a, b) => a - b);
+  if (unique.length < 2) return null;
+
+  const perChapter = Math.max(8_000, Math.floor(maxCharsTotal / unique.length));
+  const sections: string[] = [];
+  const allChunks: PageChunk[] = [];
+
+  for (const num of unique) {
+    const batch = await retrieveChunksForChapter(evaluationTypeId, num, perChapter);
+    if (batch.length === 0) {
+      sections.push(
+        `## Capítulo ${num}\n\nNo se encontraron fragmentos indexados del Capítulo ${num}.`
+      );
+      continue;
+    }
+    allChunks.push(...batch);
+    const body = batch
+      .map((c) => {
+        const pageLabel =
+          c.printedPage != null
+            ? ` (pág. impresa ${c.printedPage})`
+            : c.page != null
+              ? ` (PDF ${c.page})`
+              : "";
+        return `### Fragmento${pageLabel}\n\n${c.text}`;
+      })
+      .join("\n\n---\n\n");
+    sections.push(`## Capítulo ${num} del manual\n\n${body}`);
+  }
+
+  if (allChunks.length === 0) return null;
+
+  const text = [
+    "## Comparación de capítulos del manual de referencia",
+    "",
+    "REGLA: El usuario pide COMPARAR estos capítulos. Responde en español con un apartado por capítulo y un apartado «Comparación».",
+    "NO uses el formato de resumen sección-por-sección de un solo capítulo (### 2.1, ### 2.2…).",
+    "PROHIBIDO usar la rúbrica IGIP. Fundamenta solo en los fragmentos siguientes.",
+    "",
+    sections.join("\n\n---\n\n"),
+  ].join("\n");
+
+  return { chunks: allChunks, text };
+}

@@ -35,12 +35,39 @@ export function applyChatStreamEvent(
       });
       break;
     }
+    case "plan": {
+      trace.push({
+        id: nextTraceId(),
+        kind: "plan",
+        title: `Plan agente (Nivel ${event.agentLevel}) — ${event.label}`,
+        detail: `${event.reasoning}\n\n${event.summary}`,
+      });
+      break;
+    }
     case "intent": {
       trace.push({
         id: nextTraceId(),
         kind: "intent",
         title: `Intención: ${event.label}`,
         detail: `Modo de contexto: ${event.contextMode}`,
+      });
+      break;
+    }
+    case "tool_call": {
+      trace.push({
+        id: nextTraceId(),
+        kind: "tool",
+        title: `Herramienta: ${event.tool}`,
+        detail: JSON.stringify(event.arguments, null, 0).slice(0, 500),
+      });
+      break;
+    }
+    case "tool_result": {
+      trace.push({
+        id: nextTraceId(),
+        kind: "tool",
+        title: `Resultado: ${event.tool}`,
+        detail: event.summary,
       });
       break;
     }

@@ -85,15 +85,30 @@ export function parsePageFromQuery(message: string): number | undefined {
   return undefined;
 }
 
-/** Extrae número de capítulo si el usuario pregunta por "capítulo 1", "chapter 2", etc. */
-export function parseChapterFromQuery(message: string): number | undefined {
+/** Todos los capítulos mencionados (p. ej. "capítulo 2 ... capítulo 4" → [2, 4]). */
+export function parseChaptersFromQuery(message: string): number[] {
+  const found = new Set<number>();
   const patterns = [
-    /\b(?:cap[ií]tulo|chapter|cap\.)\s+(\d{1,2})\b/i,
-    /\b(?:resumen|resume|resumir|sumariza)\s+(?:del?\s+)?(?:el\s+)?(?:cap[ií]tulo|chapter)\s+(\d{1,2})\b/i,
+    /\b(?:cap[ií]tulo|chapter|cap\.)\s+(\d{1,2})\b/gi,
+    /\b(?:resumen|resume|resumir|sumariza)\s+(?:del?\s+)?(?:el\s+)?(?:cap[ií]tulo|chapter)\s+(\d{1,2})\b/gi,
   ];
   for (const re of patterns) {
-    const m = message.match(re);
-    if (m) return Number(m[1]);
+    for (const m of message.matchAll(re)) {
+      const n = Number(m[1]);
+      if (n >= 1 && n <= 99) found.add(n);
+    }
   }
-  return undefined;
+  return [...found].sort((a, b) => a - b);
+}
+
+/** Un solo capítulo; si hay varios mencionados devuelve undefined (usar parseChaptersFromQuery). */
+export function parseChapterFromQuery(message: string): number | undefined {
+  const all = parseChaptersFromQuery(message);
+  return all.length === 1 ? all[0] : undefined;
+}
+
+export function isChapterComparisonQuery(message: string): boolean {
+  const chapters = parseChaptersFromQuery(message);
+  if (chapters.length >= 2) return true;
+  return /\bcompar(a|ar|ación|ando)\b/i.test(message) && chapters.length >= 1;
 }
