@@ -21,8 +21,8 @@ export const CONTEXT_LIMITS: Record<ContextMode, RagLimits> = {
     skipKnowledge: true,
   },
   "chat-knowledge": {
-    topK: 45,
-    maxRetrievedChars: 32_000,
+    topK: 55,
+    maxRetrievedChars: 48_000,
     maxSystemChars: 96_000,
     skipKnowledge: false,
   },

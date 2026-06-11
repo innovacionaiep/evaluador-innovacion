@@ -1,8 +1,13 @@
 import { getConfig } from "@/lib/db";
 import { extractTextFromFile } from "@/lib/document-parser";
 import { getKnowledgeDocuments } from "@/lib/knowledge-loader";
-import { hasChunks } from "@/lib/vector-store";
-import { retrieveRelevantChunks, type RetrievedChunk } from "@/lib/rag-retrieve";
+import { hasActiveKnowledgeIndex, isKnowledgeConfigured } from "@/lib/knowledge-config";
+import {
+  retrieveRelevantChunks,
+  retrieveRelevantChunksMulti,
+  type RetrievedChunk,
+} from "@/lib/rag-retrieve";
+import { buildKnowledgeRagQueries } from "@/lib/rag-query-expand";
 import { retrieveChunksForPrintedPage } from "@/lib/page-lookup";
 import { getChapterContextForEvaluation } from "@/lib/chapter-lookup";
 import {
@@ -11,6 +16,7 @@ import {
   RAG_QUERY_RUBRIC_CHARS,
   type ContextMode,
 } from "@/lib/rag-limits";
+import { summarizeChunks, type BuildContextStreamEvent } from "@/lib/agent-events";
 import path from "path";
 import fs from "fs";
 
@@ -74,6 +80,8 @@ export type BuildSystemContextOptions = {
   evaluateDimension?: { name: string; content: string };
   /** Callback con chunks recuperados (p. ej. deduplicación en evaluación). */
   onRetrievedChunks?: (chunks: RetrievedChunk[]) => void;
+  /** Emite pasos observables durante la construcción del contexto (chat). */
+  onStreamEvent?: (event: BuildContextStreamEvent) => void;
 };
 
 function buildDefaultRagQuery(
@@ -107,6 +115,13 @@ function formatKnowledgeChunks(
     .join("\n\n---\n\n");
 }
 
+function emitContextEvent(
+  options: BuildSystemContextOptions | undefined,
+  event: BuildContextStreamEvent
+): void {
+  options?.onStreamEvent?.(event);
+}
+
 export async function buildSystemContext(
   evaluationTypeId: number,
   projectFilePaths: string[] = [],
@@ -115,9 +130,35 @@ export async function buildSystemContext(
   const config = await getConfig(evaluationTypeId);
   if (!config) return "";
 
+  emitContextEvent(options, {
+    type: "step",
+    phase: "context",
+    message: "Construyendo contexto para el modelo…",
+  });
+
   const mode: ContextMode = options?.contextMode ?? "chat-project";
   const limits = CONTEXT_LIMITS[mode];
   const maxSystemChars = limits.maxSystemChars;
+  const knowledgeConfigured = await isKnowledgeConfigured(evaluationTypeId);
+  const knowledgeIndexReady = knowledgeConfigured && (await hasActiveKnowledgeIndex(evaluationTypeId));
+
+  if (
+    !options?.skipKnowledge &&
+    !knowledgeConfigured &&
+    (mode === "chat-knowledge" || mode === "chat-chapter")
+  ) {
+    emitContextEvent(options, {
+      type: "chunks_empty",
+      message: "No hay documentos en Knowledge para este tipo de evaluación.",
+    });
+    return [
+      "## Sin documentos de referencia para este tipo de evaluación",
+      "",
+      "No hay archivos en Knowledge configurados para este tipo de evaluación (p. ej. TRL vs IGIP).",
+      "Indica al usuario que suba documentos en Configuración → Knowledge **para el tipo de evaluación activo**.",
+      "PROHIBIDO usar contenido del manual u otro knowledge de otro tipo de evaluación. No inventes respuestas.",
+    ].join("\n");
+  }
   const pageLookup =
     options?.pageNumber != null &&
     !options?.skipKnowledge &&
@@ -130,15 +171,32 @@ export async function buildSystemContext(
     (mode === "chat-chapter" || mode === "chat-knowledge" || mode === "chat-project");
 
   // Modo capítulo: fragmentos contiguos del capítulo (sin rúbrica ni instrucciones).
-  if (chapterLookup && hasChunks(evaluationTypeId)) {
+  if (chapterLookup && knowledgeIndexReady) {
     const targetChapter = options!.chapterNumber!;
-    const chapterCtx = getChapterContextForEvaluation(
+    emitContextEvent(options, {
+      type: "step",
+      phase: "rag",
+      message: `Buscando fragmentos del Capítulo ${targetChapter} en el manual indexado…`,
+    });
+    const chapterCtx = await getChapterContextForEvaluation(
       evaluationTypeId,
       targetChapter,
       limits.maxRetrievedChars
     );
     if (chapterCtx && chapterCtx.chunks.length > 0) {
       options?.onRetrievedChunks?.(chapterCtx.chunks);
+      const { previews, totalChars } = summarizeChunks(chapterCtx.chunks);
+      emitContextEvent(options, {
+        type: "chunks",
+        count: chapterCtx.chunks.length,
+        totalChars,
+        chunks: previews,
+      });
+      emitContextEvent(options, {
+        type: "context_section",
+        section: "Capítulo del manual",
+        detail: `${chapterCtx.chunks.length} fragmento(s) del capítulo ${targetChapter} (${totalChars.toLocaleString("es")} caracteres)`,
+      });
       return [
         `## Capítulo ${targetChapter} del manual de referencia`,
         "",
@@ -151,6 +209,10 @@ export async function buildSystemContext(
         formatKnowledgeChunks(chapterCtx.chunks),
       ].join("\n");
     }
+    emitContextEvent(options, {
+      type: "chunks_empty",
+      message: `No se encontraron fragmentos del Capítulo ${targetChapter} en el índice.`,
+    });
     return [
       `## Capítulo ${targetChapter} del manual`,
       "",
@@ -161,8 +223,13 @@ export async function buildSystemContext(
   }
 
   // Modo página: solo fragmentos del manual para esa página (sin rúbrica ni instrucciones).
-  if (pageLookup && hasChunks(evaluationTypeId)) {
+  if (pageLookup && knowledgeIndexReady) {
     const targetPage = options!.pageNumber!;
+    emitContextEvent(options, {
+      type: "step",
+      phase: "rag",
+      message: `Buscando contenido de la página ${targetPage} en el manual indexado…`,
+    });
     const pageChunks = retrieveChunksForPrintedPage(
       evaluationTypeId,
       targetPage,
@@ -170,6 +237,18 @@ export async function buildSystemContext(
     );
     if (pageChunks.length > 0) {
       options?.onRetrievedChunks?.(pageChunks);
+      const { previews, totalChars } = summarizeChunks(pageChunks);
+      emitContextEvent(options, {
+        type: "chunks",
+        count: pageChunks.length,
+        totalChars,
+        chunks: previews,
+      });
+      emitContextEvent(options, {
+        type: "context_section",
+        section: "Página del manual",
+        detail: `${pageChunks.length} fragmento(s) de la página ${targetPage} (${totalChars.toLocaleString("es")} caracteres)`,
+      });
       return [
         `## Contenido de la página ${targetPage} del manual de referencia`,
         "",
@@ -178,6 +257,10 @@ export async function buildSystemContext(
         formatKnowledgeChunks(pageChunks),
       ].join("\n");
     }
+    emitContextEvent(options, {
+      type: "chunks_empty",
+      message: `No se encontraron fragmentos de la página ${targetPage} en el índice.`,
+    });
     return [
       `## Página ${targetPage} del manual`,
       "",
@@ -241,6 +324,11 @@ export async function buildSystemContext(
   ].join("\n");
 
   parts.push("## Configuración actual de este tipo de evaluación\n\n" + configSummary);
+  emitContextEvent(options, {
+    type: "context_section",
+    section: "Configuración",
+    detail: "Instrucciones, formato, elementos y estado de la rúbrica",
+  });
 
   if (options?.evaluateDimension) {
     parts.push(
@@ -262,6 +350,11 @@ export async function buildSystemContext(
       .map((r) => `**${r.element}:**\n${r.content}`)
       .join("\n\n");
     parts.push("## Documentos del proyecto a evaluar (elementos identificados)\n\n" + tableText);
+    emitContextEvent(options, {
+      type: "context_section",
+      section: "Proyecto",
+      detail: `${projectElementsTable.length} elemento(s) identificado(s) del proyecto`,
+    });
   }
   if (options?.projectStructuredData?.files?.length) {
     const summary = formatStructuredDataSummary(options.projectStructuredData, MAX_STRUCTURED_SUMMARY_CHARS);
@@ -269,6 +362,15 @@ export async function buildSystemContext(
       "## Datos completos del documento (todas las hojas)\n\nUsa esta sección para responder preguntas sobre cualquier hoja del archivo (por ejemplo plan de actividades, Gantt, presupuesto, indicadores). Contiene el contenido de todas las hojas extraídas.\n\n" +
         summary
     );
+    const sheetCount = options.projectStructuredData.files.reduce(
+      (n, f) => n + (f.sheets?.length ?? 0),
+      0
+    );
+    emitContextEvent(options, {
+      type: "context_section",
+      section: "Excel estructurado",
+      detail: `${options.projectStructuredData.files.length} archivo(s), ${sheetCount} hoja(s)`,
+    });
   }
   if (!projectElementsTable?.length && !options?.projectStructuredData?.files?.length && !options?.projectElementsOnly && projectFilePaths.length > 0) {
     const projectTexts: string[] = [];
@@ -300,33 +402,100 @@ REGLA para preguntas sobre rúbrica o criterios: Responde únicamente que no hay
   const skipKnowledge =
     options?.skipKnowledge === true || limits.skipKnowledge;
 
-  if (!skipKnowledge && hasChunks(evaluationTypeId)) {
+  if (!skipKnowledge && knowledgeIndexReady) {
     try {
       const ragQuery =
         options?.ragQuery?.trim() ||
         buildDefaultRagQuery(promptForInstructions, rubricText);
-      const chunks = await retrieveRelevantChunks(evaluationTypeId, ragQuery, {
-        topK: limits.topK,
-        maxRetrievedChars: limits.maxRetrievedChars,
-        excludeIds: options?.excludeChunkIds,
-        pageNumber: options?.pageNumber,
+      const ragQueries =
+        mode === "chat-knowledge" ? buildKnowledgeRagQueries(ragQuery) : undefined;
+
+      emitContextEvent(options, {
+        type: "step",
+        phase: "rag",
+        message:
+          mode === "chat-knowledge"
+            ? "Buscando en Knowledge (búsqueda híbrida ampliada)…"
+            : "Buscando fragmentos relevantes en Knowledge (embeddings + keywords)…",
       });
+      emitContextEvent(options, {
+        type: "rag_query",
+        query: ragQuery,
+        queries: ragQueries,
+      });
+
+      const chunks =
+        mode === "chat-knowledge" && ragQueries
+          ? await retrieveRelevantChunksMulti(evaluationTypeId, ragQueries, {
+              topK: limits.topK,
+              maxRetrievedChars: limits.maxRetrievedChars,
+              excludeIds: options?.excludeChunkIds,
+              pageNumber: options?.pageNumber,
+            })
+          : await retrieveRelevantChunks(evaluationTypeId, ragQuery, {
+              topK: limits.topK,
+              maxRetrievedChars: limits.maxRetrievedChars,
+              excludeIds: options?.excludeChunkIds,
+              pageNumber: options?.pageNumber,
+            });
       if (chunks.length > 0) {
         options?.onRetrievedChunks?.(chunks);
+        const { previews, totalChars } = summarizeChunks(chunks);
+        emitContextEvent(options, {
+          type: "chunks",
+          count: chunks.length,
+          totalChars,
+          chunks: previews,
+        });
+        emitContextEvent(options, {
+          type: "context_section",
+          section: "Knowledge (RAG)",
+          detail: `${chunks.length} fragmento(s) recuperado(s), ${totalChars.toLocaleString("es")} caracteres para el contexto`,
+        });
+        const strictKnowledge =
+          mode === "chat-knowledge"
+            ? "REGLA: Extrae con el máximo detalle posible lo que aparece en estos fragmentos (definiciones, encuestas, métodos, pasos). No inventes tablas ni páginas. Si los fragmentos son parciales, resume primero lo disponible y solo después indica qué aspecto no figura en ellos.\n\n"
+            : "REGLA: Fundamenta tu respuesta en estos fragmentos del manual de referencia cuando sea pertinente. Cita conceptos del marco teórico cuando apliquen.\n\n";
         const knowledgeSection =
           "## Documentación de referencia (Knowledge)\n\n" +
-          "REGLA: Fundamenta tu respuesta en estos fragmentos del manual de referencia cuando sea pertinente. Cita conceptos del marco teórico cuando apliquen.\n\n" +
+          strictKnowledge +
           formatKnowledgeChunks(chunks);
         parts.push(knowledgeSection);
+      } else {
+        emitContextEvent(options, {
+          type: "chunks_empty",
+          message: "La búsqueda en el índice no devolvió fragmentos para esta consulta.",
+        });
       }
     } catch {
-      /* fallback below */
+      emitContextEvent(options, {
+        type: "step",
+        phase: "rag",
+        message: "Error en la búsqueda RAG; intentando cargar documentos completos…",
+      });
     }
+  } else if (skipKnowledge) {
+    emitContextEvent(options, {
+      type: "context_section",
+      section: "Knowledge",
+      detail: "Omitido para esta pregunta (modo configuración o sin índice)",
+    });
+  } else if (!knowledgeIndexReady && knowledgeConfigured) {
+    emitContextEvent(options, {
+      type: "step",
+      phase: "rag",
+      message: "Índice RAG no disponible; se usará texto completo de Knowledge si existe.",
+    });
   }
 
   if (!skipKnowledge && !parts.some((p) => p.startsWith("## Documentación de referencia"))) {
     const docs = await getKnowledgeDocuments(evaluationTypeId);
     if (docs.length > 0) {
+      emitContextEvent(options, {
+        type: "step",
+        phase: "rag",
+        message: `Cargando ${docs.length} documento(s) de Knowledge sin búsqueda vectorial (respaldo)…`,
+      });
       const maxFallback = Math.min(40_000, limits.maxRetrievedChars * 2);
       const knowledgeTexts = docs.map((d) => {
         const t = d.text.length > maxFallback ? d.text.slice(0, maxFallback) + "\n[…truncado]" : d.text;
@@ -337,6 +506,11 @@ REGLA para preguntas sobre rúbrica o criterios: Responde únicamente que no hay
   }
 
   parts.push("## Rúbrica y criterios de evaluación\n\n" + rubricSectionText);
+  emitContextEvent(options, {
+    type: "context_section",
+    section: "Rúbrica",
+    detail: rubricText ? "Rúbrica configurada incluida en el contexto" : "Sin rúbrica configurada",
+  });
 
   const separator = "\n\n---\n\n";
   const promptPart = parts.find((p) => p.startsWith("## Instrucciones de evaluación"));
@@ -366,6 +540,18 @@ REGLA para preguntas sobre rúbrica o criterios: Responde únicamente que no hay
   const truncationSuffix = "\n\n[Contexto truncado por límite de longitud.]";
   if (fullContext.length > maxSystemChars) {
     fullContext = fullContext.slice(0, maxSystemChars - truncationSuffix.length) + truncationSuffix;
+    emitContextEvent(options, {
+      type: "step",
+      phase: "context",
+      message: `Contexto truncado al límite de ${maxSystemChars.toLocaleString("es")} caracteres.`,
+    });
   }
+
+  emitContextEvent(options, {
+    type: "step",
+    phase: "context",
+    message: `Contexto listo (${fullContext.length.toLocaleString("es")} caracteres para el system prompt).`,
+  });
+
   return fullContext;
 }

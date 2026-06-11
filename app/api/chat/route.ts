@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getConfig } from "@/lib/db";
 import { buildSystemContext, type ProjectStructuredData } from "@/lib/build-context";
-import { streamChat } from "@/lib/openrouter";
+import { streamChatDetailed } from "@/lib/openrouter";
 import {
   classifyChatIntent,
   chatIntentToContextMode,
@@ -9,6 +9,7 @@ import {
   parseChapterFromQuery,
 } from "@/lib/chat-intent";
 import type { ContextMode } from "@/lib/rag-limits";
+import { INTENT_LABELS, type ChatStreamEvent } from "@/lib/agent-events";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -26,7 +27,7 @@ const INTENT_HINTS: Record<string, string> = {
   config:
     "El usuario pregunta sobre la CONFIGURACIÓN (instrucciones, formato, elementos o rúbrica configurada). Responde solo desde las secciones de configuración.\n\n",
   knowledge:
-    "El usuario pregunta sobre el MANUAL / KNOWLEDGE de referencia. Responde con naturalidad basándote en la documentación de referencia. Si falta información concreta, dilo dentro del texto sin añadir notas meta al final sobre fragmentos o knowledge.\n\n",
+    "El usuario pregunta sobre el MANUAL / KNOWLEDGE de referencia.\n\n",
   project:
     "El usuario pregunta sobre el PROYECTO subido. Prioriza 'Documentos del proyecto a evaluar' y datos del Excel.\n\n",
 };
@@ -36,6 +37,13 @@ const pageQuestionRule = (page: number) =>
 
 const chapterQuestionRule = (chapter: number) =>
   `REGLA OBLIGATORIA (capítulo ${chapter}): Resumen del Capítulo ${chapter}. Sigue el «Formato obligatorio de la respuesta» del system prompt: un encabezado ### por cada sección del índice, en orden, con 2–5 oraciones bajo cada uno. PROHIBIDO omitir secciones (p. ej. saltar de ${chapter}.1.4 a ${chapter}.3 sin ${chapter}.2). PROHIBIDO fusionar encabezados o poner solo «resumen anticipado» en lugar del contenido. Si una subsección anticipa otro capítulo, dilo dentro de su párrafo. PROHIBIDO usar la rúbrica. Sin notas finales sobre fragmentos o knowledge.\n\n`;
+
+const knowledgeGroundingRule =
+  "REGLA OBLIGATORIA (knowledge): Responde con información de la sección «Documentación de referencia (Knowledge)». Extrae primero el máximo detalle metodológico disponible en los fragmentos (encuestas, definiciones, pasos de recolección). PROHIBIDO inventar tablas, métricas o páginas. Si los fragmentos son incompletos, resume lo que sí aparece antes de decir qué falta. No rellenes con conocimiento general del modelo.\n\n";
+
+function emit(controller: ReadableStreamDefaultController<Uint8Array>, encoder: TextEncoder, event: ChatStreamEvent) {
+  controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
+}
 
 export async function POST(request: Request) {
   try {
@@ -97,57 +105,103 @@ export async function POST(request: Request) {
           ? `Manual Oslo página ${pageNumber} chapter section content`
           : chapterNumber != null
             ? `Manual Oslo Chapter ${chapterNumber} capítulo ${chapterNumber} resumen`
-            : [message, intent === "knowledge" ? "Manual Oslo marco teórico innovación" : ""]
-                .filter(Boolean)
-                .join(" ");
-
-    const systemContent = await buildSystemContext(evaluationTypeId, projectFilePaths, {
-      projectElementsTable: projectElementsTable?.length ? projectElementsTable : undefined,
-      projectStructuredData,
-      skipKnowledge: skipKnowledgeLegacy || intent === "config",
-      projectElementsOnly: true,
-      contextMode,
-      ragQuery,
-      pageNumber,
-      chapterNumber,
-    });
-
-    const languageInstruction =
-      "Responde siempre en español. Todas tus respuestas deben estar escritas íntegramente en español.\n\n";
-    const baseInstruction =
-      "Eres un asistente experto en evaluación de proyectos. Responde con claridad y basándote en la documentación y rúbrica cuando estén disponibles.\n\nREGLA OBLIGATORIA para objetivos: Si preguntan por el objetivo general o los objetivos específicos del proyecto, cita ÚNICAMENTE el texto de la sección del proyecto. No parafrasees.\n\nNo uses nunca las etiquetas <think> ni </think> en tus respuestas.";
-    const noRubricPrefix = !hasRubric ? NO_RUBRIC_RULE : "";
-    const pageRule = pageNumber != null ? pageQuestionRule(pageNumber) : "";
-    const chapterRule = chapterNumber != null ? chapterQuestionRule(chapterNumber) : "";
-    const focusedKnowledgeQuery = pageNumber != null || chapterNumber != null;
-    const intentHint = focusedKnowledgeQuery ? "" : INTENT_HINTS[intent] ?? "";
-    const configRuleForPage = focusedKnowledgeQuery ? "" : CONFIG_RULE;
-    const systemMessage =
-      configRuleForPage +
-      pageRule +
-      chapterRule +
-      noRubricPrefix +
-      intentHint +
-      languageInstruction +
-      (systemContent || baseInstruction);
-
-    const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
-      { role: "system", content: systemMessage },
-      ...history.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
-      { role: "user", content: message },
-    ];
-
-    const stream = streamChat(messages);
+            : message;
 
     const encoder = new TextEncoder();
     const readable = new ReadableStream({
       async start(controller) {
         try {
-          for await (const chunk of stream) {
-            controller.enqueue(encoder.encode(chunk));
+          emit(controller, encoder, {
+            type: "step",
+            phase: "intent",
+            message: "Analizando la pregunta y eligiendo fuentes de contexto…",
+          });
+          emit(controller, encoder, {
+            type: "intent",
+            intent,
+            contextMode,
+            label: INTENT_LABELS[intent] ?? intent,
+          });
+
+          const systemContent = await buildSystemContext(evaluationTypeId, projectFilePaths, {
+            projectElementsTable: projectElementsTable?.length ? projectElementsTable : undefined,
+            projectStructuredData,
+            skipKnowledge:
+              intent === "config" ||
+              (skipKnowledgeLegacy && intent === "project" && chapterNumber == null && pageNumber == null),
+            projectElementsOnly: true,
+            contextMode,
+            ragQuery,
+            pageNumber,
+            chapterNumber,
+            onStreamEvent: (event) => emit(controller, encoder, event),
+          });
+
+          const languageInstruction =
+            "Responde siempre en español. Todas tus respuestas deben estar escritas íntegramente en español.\n\n";
+          const baseInstruction =
+            "Eres un asistente experto en evaluación de proyectos. Responde con claridad y basándote en la documentación y rúbrica cuando estén disponibles.\n\nREGLA OBLIGATORIA para objetivos: Si preguntan por el objetivo general o los objetivos específicos del proyecto, cita ÚNICAMENTE el texto de la sección del proyecto. No parafrasees.\n\nNo uses nunca las etiquetas <think> ni </think> en tus respuestas.";
+          const noRubricPrefix = !hasRubric ? NO_RUBRIC_RULE : "";
+          const pageRule = pageNumber != null ? pageQuestionRule(pageNumber) : "";
+          const chapterRule = chapterNumber != null ? chapterQuestionRule(chapterNumber) : "";
+          const focusedKnowledgeQuery = pageNumber != null || chapterNumber != null;
+          const knowledgeRule =
+            intent === "knowledge" && !focusedKnowledgeQuery ? knowledgeGroundingRule : "";
+          const intentHint = focusedKnowledgeQuery ? "" : INTENT_HINTS[intent] ?? "";
+          const configRuleForPage = focusedKnowledgeQuery ? "" : CONFIG_RULE;
+          const systemMessage =
+            configRuleForPage +
+            pageRule +
+            chapterRule +
+            knowledgeRule +
+            noRubricPrefix +
+            intentHint +
+            languageInstruction +
+            (systemContent || baseInstruction);
+
+          const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
+            { role: "system", content: systemMessage },
+            ...history.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+            { role: "user", content: message },
+          ];
+
+          emit(controller, encoder, {
+            type: "step",
+            phase: "llm",
+            message: "Generando respuesta con el modelo de lenguaje…",
+          });
+
+          let hasThinking = false;
+          let hasContent = false;
+
+          for await (const part of streamChatDetailed(messages)) {
+            if (part.kind === "thinking") {
+              if (!hasThinking) {
+                emit(controller, encoder, {
+                  type: "step",
+                  phase: "thinking",
+                  message: "El modelo está razonando antes de responder…",
+                });
+                hasThinking = true;
+              }
+              emit(controller, encoder, { type: "thinking", chunk: part.text });
+            } else {
+              if (!hasContent && part.text.trim()) {
+                emit(controller, encoder, {
+                  type: "step",
+                  phase: "answer",
+                  message: "Redactando la respuesta final…",
+                });
+                hasContent = true;
+              }
+              emit(controller, encoder, { type: "content", chunk: part.text });
+            }
           }
+
+          emit(controller, encoder, { type: "done" });
         } catch (err) {
-          controller.enqueue(encoder.encode(`[Error: ${err instanceof Error ? err.message : String(err)}]`));
+          const errMsg = err instanceof Error ? err.message : String(err);
+          emit(controller, encoder, { type: "error", error: errMsg });
         } finally {
           controller.close();
         }
@@ -156,7 +210,7 @@ export async function POST(request: Request) {
 
     return new Response(readable, {
       headers: {
-        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Type": "application/x-ndjson; charset=utf-8",
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
       },

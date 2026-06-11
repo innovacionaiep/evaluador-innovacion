@@ -53,6 +53,7 @@ export default function ConfigPanel({
     chunkCount: number;
     indexedAt: string | null;
     chunksFileBytes: number;
+    knowledgeConfigured: boolean;
   } | null>(null);
 
   const refreshRagStatus = (typeId: number) => {
@@ -65,6 +66,7 @@ export default function ConfigPanel({
             chunkCount: data.chunkCount,
             indexedAt: data.indexedAt ?? null,
             chunksFileBytes: data.chunksFileBytes ?? 0,
+            knowledgeConfigured: !!data.knowledgeConfigured,
           });
         }
       })
@@ -96,8 +98,12 @@ export default function ConfigPanel({
   useEffect(() => {
     if (!selectedTypeId) {
       setConfig(defaultConfig);
+      setRagStatus(null);
+      setKnowledgeIndexStatus(null);
       return;
     }
+    setRagStatus(null);
+    setKnowledgeIndexStatus(null);
     setLoading(true);
     fetch(`/api/config/${selectedTypeId}`)
       .then((r) => r.json())
@@ -520,13 +526,15 @@ export default function ConfigPanel({
               {ragStatus && (
                 <p className="mt-2 shrink-0 text-xs text-gray-500 dark:text-gray-400">
                   Índice RAG:{" "}
-                  {ragStatus.hasIndex
-                    ? `${ragStatus.chunkCount} fragmentos · ${formatBytes(ragStatus.chunksFileBytes)}${
-                        ragStatus.indexedAt
-                          ? ` · ${new Date(ragStatus.indexedAt).toLocaleString("es-CL")}`
-                          : ""
-                      }`
-                    : "sin indexar (pulse Reindexar RAG tras subir documentos)"}
+                  {!ragStatus.knowledgeConfigured
+                    ? "sin documentos configurados para este tipo de evaluación"
+                    : ragStatus.hasIndex
+                      ? `${ragStatus.chunkCount} fragmentos · ${formatBytes(ragStatus.chunksFileBytes)}${
+                          ragStatus.indexedAt
+                            ? ` · ${new Date(ragStatus.indexedAt).toLocaleString("es-CL")}`
+                            : ""
+                        }`
+                      : "sin indexar (pulse Reindexar RAG tras subir documentos)"}
                 </p>
               )}
               {knowledgeIndexStatus && (

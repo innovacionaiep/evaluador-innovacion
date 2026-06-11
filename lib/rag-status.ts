@@ -2,6 +2,10 @@ import path from "path";
 import fs from "fs";
 import { getVectorsDir } from "@/lib/storage";
 import { loadChunks } from "@/lib/vector-store";
+import {
+  clearOrphanKnowledgeIndex,
+  isKnowledgeConfigured,
+} from "@/lib/knowledge-config";
 
 const META_FILE = "meta.json";
 const CHUNKS_FILE = "chunks.json";
@@ -12,13 +16,18 @@ export type RagStatus = {
   indexedAt: string | null;
   knowledgeVersion: string | null;
   chunksFileBytes: number;
+  knowledgeConfigured: boolean;
 };
 
-export function getRagStatus(evaluationTypeId: number): RagStatus {
+export async function getRagStatus(evaluationTypeId: number): Promise<RagStatus> {
   const dir = getVectorsDir(evaluationTypeId);
   const chunksPath = path.join(dir, CHUNKS_FILE);
   const metaPath = path.join(dir, META_FILE);
-  const chunks = loadChunks(evaluationTypeId);
+  const knowledgeConfigured = await isKnowledgeConfigured(evaluationTypeId);
+  if (!knowledgeConfigured) {
+    await clearOrphanKnowledgeIndex(evaluationTypeId);
+  }
+  const chunks = knowledgeConfigured ? loadChunks(evaluationTypeId) : [];
 
   let indexedAt: string | null = null;
   let knowledgeVersion: string | null = null;
@@ -45,10 +54,11 @@ export function getRagStatus(evaluationTypeId: number): RagStatus {
   }
 
   return {
-    hasIndex: chunks.length > 0,
-    chunkCount: chunks.length,
-    indexedAt,
-    knowledgeVersion,
-    chunksFileBytes,
+    hasIndex: knowledgeConfigured && chunks.length > 0,
+    chunkCount: knowledgeConfigured ? chunks.length : 0,
+    indexedAt: knowledgeConfigured ? indexedAt : null,
+    knowledgeVersion: knowledgeConfigured ? knowledgeVersion : null,
+    chunksFileBytes: knowledgeConfigured ? chunksFileBytes : 0,
+    knowledgeConfigured,
   };
 }

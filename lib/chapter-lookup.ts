@@ -1,3 +1,4 @@
+import { isKnowledgeConfigured, loadActiveChunks } from "@/lib/knowledge-config";
 import { loadChunks, type StoredChunk } from "@/lib/vector-store";
 import { normalizeDocText, type PageChunk } from "@/lib/page-lookup";
 
@@ -230,13 +231,14 @@ function resolveChapterBounds(
 /**
  * Recupera chunks contiguos de un capítulo (cabeceras CHAPTER/CAPÍTULO N. en el cuerpo).
  */
-export function retrieveChunksForChapter(
+export async function retrieveChunksForChapter(
   evaluationTypeId: number,
   chapterNum: number,
   maxChars: number
-): PageChunk[] {
-  const all = loadChunks(evaluationTypeId);
-  if (all.length === 0 || chapterNum < 1) return [];
+): Promise<PageChunk[]> {
+  if (chapterNum < 1 || !(await isKnowledgeConfigured(evaluationTypeId))) return [];
+  const all = await loadActiveChunks(evaluationTypeId);
+  if (all.length === 0) return [];
 
   const bounds = resolveChapterBounds(all, chapterNum);
   if (!bounds) return [];
@@ -268,14 +270,14 @@ export function retrieveChunksForChapter(
   return out;
 }
 
-export function getChapterContextForEvaluation(
+export async function getChapterContextForEvaluation(
   evaluationTypeId: number,
   chapterNum: number,
   maxChars: number
-): { chunks: PageChunk[]; outline: ChapterOutlineSection[]; rules: string } | null {
-  const all = loadChunks(evaluationTypeId);
-  const chunks = retrieveChunksForChapter(evaluationTypeId, chapterNum, maxChars);
+): Promise<{ chunks: PageChunk[]; outline: ChapterOutlineSection[]; rules: string } | null> {
+  const chunks = await retrieveChunksForChapter(evaluationTypeId, chapterNum, maxChars);
   if (chunks.length === 0) return null;
+  const all = await loadActiveChunks(evaluationTypeId);
   const outline = getChapterOutline(all, chunks, chapterNum);
   const rules = buildChapterContextRules(chapterNum, outline);
   return { chunks, outline, rules };

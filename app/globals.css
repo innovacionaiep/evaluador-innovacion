@@ -60,3 +60,18 @@ select:focus-visible {
   outline: 2px solid #6b7280;
   outline-offset: 2px;
 }
+
+@keyframes agent-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.agent-trace-step-in {
+  animation: agent-step-in 0.38s ease-out forwards;
+}

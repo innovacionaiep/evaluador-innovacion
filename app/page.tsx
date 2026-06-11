@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Header from "@/components/Header";
 import ChatPanel from "@/components/ChatPanel";
 import ReportPanel from "@/components/ReportPanel";
@@ -51,6 +51,23 @@ export default function Home() {
   const [elementsWithSection, setElementsWithSection] = useState<{ title: string; section: string }[]>([]);
   const [projectSectionOpen, setProjectSectionOpen] = useState(true);
   const [fullscreenSection, setFullscreenSection] = useState<"project" | "report" | null>(null);
+  const prevActiveTypeIdRef = useRef<number | null>(null);
+
+  /** Al cambiar de tipo de evaluación, limpiar la UI principal (chat, informe, proyecto). */
+  useEffect(() => {
+    if (activeTypeId == null) return;
+    if (prevActiveTypeIdRef.current != null && prevActiveTypeIdRef.current !== activeTypeId) {
+      setMessages([]);
+      setReportContent("");
+      setProjectFilePaths([]);
+      setExtractedProjectText("");
+      setExtractedProjectTable([]);
+      setExtractedStructuredData(null);
+      setExtractedProjectLoading(false);
+      setFullscreenSection(null);
+    }
+    prevActiveTypeIdRef.current = activeTypeId;
+  }, [activeTypeId]);
 
   useEffect(() => {
     fetch("/api/evaluation-types")
@@ -267,6 +284,7 @@ export default function Home() {
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col border-r border-gray-200 dark:border-gray-700">
           <ChatPanel
+            key={activeTypeId ?? "no-type"}
             messages={messages}
             onMessagesChange={setMessages}
             reportContent={reportContent}

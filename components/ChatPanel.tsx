@@ -2,8 +2,21 @@
 
 import { useState, useRef } from "react";
 import type { ProjectStructuredData } from "@/lib/build-context";
+import AgentTrace from "@/components/AgentTrace";
+import type { AgentTraceEntry } from "@/lib/agent-events";
+import {
+  applyChatStreamEvent,
+  createChatStreamState,
+  parseNdjsonLine,
+} from "@/lib/chat-stream";
+import { createStaggeredTraceReveal } from "@/lib/trace-reveal";
 
-export type ChatMessage = { role: "user" | "assistant"; content: string };
+export type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+  trace?: AgentTraceEntry[];
+  traceRevealing?: boolean;
+};
 
 /** Elimina bloques <think>...</think> del texto para no mostrarlos en el chat. */
 function stripThinkBlocks(text: string): string {
@@ -70,6 +83,7 @@ export default function ChatPanel({
   const [evaluating, setEvaluating] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const traceRevealRef = useRef<ReturnType<typeof createStaggeredTraceReveal> | null>(null);
 
   const CHAT_TIMEOUT_MS = 120_000;
 
@@ -78,7 +92,27 @@ export default function ChatPanel({
     if (!text || !activeTypeId || loading) return;
     setInput("");
     onMessagesChange((prev) => [...prev, { role: "user", content: text }]);
-    onMessagesChange((prev) => [...prev, { role: "assistant", content: "" }]);
+    onMessagesChange((prev) => [
+      ...prev,
+      { role: "assistant", content: "", trace: [], traceRevealing: true },
+    ]);
+    traceRevealRef.current?.destroy();
+    const reveal = createStaggeredTraceReveal((revealed) => {
+      onMessagesChange((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last?.role === "assistant") {
+          next[next.length - 1] = {
+            ...last,
+            content: revealed.content,
+            trace: revealed.trace,
+            traceRevealing: revealed.revealing,
+          };
+        }
+        return next;
+      });
+    });
+    traceRevealRef.current = reveal;
     setLoading(true);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
@@ -104,37 +138,74 @@ export default function ChatPanel({
       }
       const reader = res.body?.getReader();
       const decoder = new TextDecoder();
-      let accumulated = "";
+      let buffer = "";
+      let streamState = createChatStreamState();
+
+      const syncAssistant = (live: boolean) => {
+        const trace = streamState.trace.map((t) => ({ ...t, live: live && t.live }));
+        reveal.setState(trace, stripThinkBlocks(streamState.content));
+      };
+
       if (reader) {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          accumulated += decoder.decode(value, { stream: true });
-          onMessagesChange((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last?.role === "assistant") next[next.length - 1] = { ...last, content: stripThinkBlocks(accumulated) };
-            return next;
-          });
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            const event = parseNdjsonLine(line);
+            if (!event) continue;
+            if (event.type === "error") throw new Error(event.error);
+            streamState = applyChatStreamEvent(streamState, event, true);
+            syncAssistant(true);
+          }
         }
+        if (buffer.trim()) {
+          const event = parseNdjsonLine(buffer);
+          if (event) {
+            if (event.type === "error") throw new Error(event.error);
+            streamState = applyChatStreamEvent(streamState, event, false);
+          }
+        }
+        streamState = applyChatStreamEvent(streamState, { type: "done" }, false);
+        syncAssistant(false);
       }
-      const final = stripThinkBlocks(accumulated);
+
+      const final = stripThinkBlocks(streamState.content);
       if (!final.trim()) {
+        reveal.flushAll();
         onMessagesChange((prev) => {
           const next = [...prev];
           const last = next[next.length - 1];
-          if (last?.role === "assistant") next[next.length - 1] = { ...last, content: "[Sin respuesta del evaluador. Intenta de nuevo.]" };
+          if (last?.role === "assistant") {
+            next[next.length - 1] = {
+              ...last,
+              content: "[Sin respuesta del evaluador. Intenta de nuevo.]",
+              trace: streamState.trace,
+              traceRevealing: false,
+            };
+          }
           return next;
         });
       }
     } catch (e) {
       clearTimeout(timeoutId);
+      traceRevealRef.current?.flushAll();
       const msg = e instanceof Error ? e.message : String(e);
       const isTimeout = msg.includes("abort") || msg.includes("timeout");
       onMessagesChange((prev) => {
         const next = [...prev];
         const last = next[next.length - 1];
-        if (last?.role === "assistant") next[next.length - 1] = { ...last, content: isTimeout ? "[Tiempo de espera agotado. El evaluador tardó demasiado.]" : `[Error: ${msg}]` };
+        if (last?.role === "assistant") {
+          next[next.length - 1] = {
+            ...last,
+            content: isTimeout
+              ? "[Tiempo de espera agotado. El evaluador tardó demasiado.]"
+              : `[Error: ${msg}]`,
+            traceRevealing: false,
+          };
+        }
         return next;
       });
     } finally {
@@ -288,11 +359,30 @@ export default function ChatPanel({
               >
                 {m.role === "user" ? "Usuario" : "Evaluador"}
               </span>
+              {m.role === "assistant" &&
+              (m.trace?.length || m.traceRevealing || (loading && i === messages.length - 1)) ? (
+                <div className="mt-1.5">
+                  <AgentTrace
+                    entries={m.trace ?? []}
+                    isActive={(loading || m.traceRevealing) && i === messages.length - 1}
+                    isRevealing={!!m.traceRevealing}
+                  />
+                </div>
+              ) : null}
               <div className="mt-1 flex items-center gap-2 whitespace-pre-wrap break-words text-sm">
-                {m.role === "assistant" && !m.content && loading && i === messages.length - 1 ? (
+                {m.role === "assistant" &&
+                !m.content &&
+                (loading || m.traceRevealing) &&
+                i === messages.length - 1 ? (
                   <>
                     <LoadingSpinner />
-                    <span className="text-gray-500 dark:text-gray-400">Respondiendo…</span>
+                    <span className="text-gray-500 dark:text-gray-400">
+                      {m.traceRevealing
+                        ? "Analizando…"
+                        : m.trace?.length
+                          ? "Generando respuesta…"
+                          : "Respondiendo…"}
+                    </span>
                   </>
                 ) : (
                   m.content || (m.role === "assistant" ? "…" : "")

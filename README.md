@@ -25,7 +25,7 @@ Aplicación tipo agente-chat que evalúa proyectos usando documentación y rúbr
 
    ```
    OPENROUTER_MODEL=openrouter/free
-   OPENROUTER_EMBEDDING_MODEL=openai/text-embedding-3-small
+   OPENROUTER_EMBEDDING_MODEL=nvidia/llama-nemotron-embed-vl-1b-v2:free
    ```
 
 3. Arrancar en desarrollo:

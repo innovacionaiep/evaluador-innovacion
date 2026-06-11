@@ -15,7 +15,7 @@ export async function GET(
     if (!type) {
       return NextResponse.json({ error: "Evaluation type not found" }, { status: 404 });
     }
-    const status = getRagStatus(id);
+    const status = await getRagStatus(id);
     return NextResponse.json(status);
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });

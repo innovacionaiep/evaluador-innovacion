@@ -6,7 +6,7 @@
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const DEFAULT_MODEL = "openrouter/free";
 const EXTRACT_VISION_MODEL = "openrouter/free";
-const DEFAULT_EMBEDDING_MODEL = "openai/text-embedding-3-small";
+const DEFAULT_EMBEDDING_MODEL = "nvidia/llama-nemotron-embed-vl-1b-v2:free";
 const EMBEDDING_BATCH_SIZE = 16;
 
 function openRouterHeaders(apiKey: string): Record<string, string> {
@@ -103,6 +103,140 @@ export async function* streamChat(
       }
     }
   }
+}
+
+export type ChatStreamPart = { kind: "content" | "thinking"; text: string };
+
+const THINK_END_RE = /<\/think>|<\/redacted_thinking>/i;
+const THINK_START_RE = /<think>|<think>/i;
+const PARTIAL_TAG_RE = /<(?:\/?think(?:ing)?|redacted_thinking)?$/i;
+
+/** Separa razonamiento (etiquetas think / delta.reasoning) del contenido visible. */
+function* flushThinkSplitter(
+  splitter: { inThink: boolean; carry: string },
+  delta: string
+): Generator<ChatStreamPart> {
+  splitter.carry += delta;
+  while (splitter.carry.length > 0) {
+    if (splitter.inThink) {
+      const endMatch = splitter.carry.match(THINK_END_RE);
+      if (endMatch && endMatch.index !== undefined) {
+        const thinkPart = splitter.carry.slice(0, endMatch.index);
+        if (thinkPart) yield { kind: "thinking", text: thinkPart };
+        splitter.carry = splitter.carry.slice(endMatch.index + endMatch[0].length);
+        splitter.inThink = false;
+        continue;
+      }
+      if (splitter.carry.length > 40) {
+        yield { kind: "thinking", text: splitter.carry.slice(0, -30) };
+        splitter.carry = splitter.carry.slice(-30);
+      }
+      break;
+    }
+
+    const startMatch = splitter.carry.match(THINK_START_RE);
+    if (startMatch && startMatch.index !== undefined) {
+      const before = splitter.carry.slice(0, startMatch.index);
+      if (before) yield { kind: "content", text: before };
+      splitter.carry = splitter.carry.slice(startMatch.index + startMatch[0].length);
+      splitter.inThink = true;
+      continue;
+    }
+
+    const partial = splitter.carry.match(PARTIAL_TAG_RE);
+    if (partial && partial.index !== undefined && partial.index > 0) {
+      yield { kind: "content", text: splitter.carry.slice(0, partial.index) };
+      splitter.carry = splitter.carry.slice(partial.index);
+      break;
+    }
+    if (partial) break;
+
+    yield { kind: "content", text: splitter.carry };
+    splitter.carry = "";
+  }
+}
+
+function* drainThinkSplitter(splitter: { inThink: boolean; carry: string }): Generator<ChatStreamPart> {
+  if (!splitter.carry) return;
+  yield { kind: splitter.inThink ? "thinking" : "content", text: splitter.carry };
+  splitter.carry = "";
+}
+
+/** Igual que streamChat pero distingue razonamiento (thinking) de la respuesta final. */
+export async function* streamChatDetailed(
+  messages: { role: "system" | "user" | "assistant"; content: string }[],
+  options?: { temperature?: number; max_tokens?: number; model?: string }
+): AsyncGenerator<ChatStreamPart, void, unknown> {
+  const apiKey = getApiKey();
+  const model = options?.model ?? process.env.OPENROUTER_MODEL ?? DEFAULT_MODEL;
+  const maxTokens = options?.max_tokens ?? 8192;
+  const temperature = options?.temperature ?? 0.3;
+
+  let res: Response;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_LLM_RETRIES; attempt++) {
+    try {
+      res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+        method: "POST",
+        headers: openRouterHeaders(apiKey),
+        body: JSON.stringify({
+          model,
+          messages,
+          stream: true,
+          max_tokens: maxTokens,
+          temperature,
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.text();
+        throw new Error(`${res.status} ${errBody}`);
+      }
+      lastErr = null;
+      break;
+    } catch (e) {
+      lastErr = e;
+      if (!isRetryableProviderError(e) || attempt === MAX_LLM_RETRIES) throw e;
+      await sleep(RETRY_BASE_MS * Math.pow(2, attempt - 1));
+    }
+  }
+  if (lastErr != null) throw lastErr;
+
+  const reader = res!.body?.getReader();
+  if (!reader) throw new Error("No response body");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const splitter = { inThink: false, carry: "" };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const data = line.slice(6);
+      if (data === "[DONE]") continue;
+      try {
+        const json = JSON.parse(data);
+        const delta = json.choices?.[0]?.delta;
+        const reasoning =
+          (typeof delta?.reasoning === "string" && delta.reasoning) ||
+          (typeof delta?.reasoning_content === "string" && delta.reasoning_content);
+        if (reasoning) yield { kind: "thinking", text: reasoning };
+
+        const content = delta?.content;
+        if (typeof content === "string" && content) {
+          yield* flushThinkSplitter(splitter, content);
+        }
+      } catch {
+        /* ignore malformed chunk */
+      }
+    }
+  }
+  yield* drainThinkSplitter(splitter);
 }
 
 export type VisionMessageContent =
