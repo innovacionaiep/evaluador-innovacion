@@ -3,14 +3,17 @@ import path from "path";
 import fs from "fs";
 import { put as blobPut } from "@vercel/blob";
 import {
+  clearSessionProjectFiles,
   getKnowledgeDir,
   getRubricPath,
   getSessionDir,
+  listSessionProjectFilePaths,
 } from "@/lib/storage";
+import { clearProjectIndex } from "@/lib/project-vector-store";
 import { getConfig, updateConfig } from "@/lib/db";
-import { getSupportedExtensions } from "@/lib/document-parser";
+import { getSupportedExtensions, getProjectUploadExtensions } from "@/lib/document-parser";
 import { indexKnowledge } from "@/lib/rag-index";
-import { indexProjectFiles } from "@/lib/project-rag-index";
+import { ingestProjectFiles } from "@/lib/project-ingest";
 
 export const maxDuration = 300;
 
@@ -66,7 +69,9 @@ export async function POST(request: Request) {
         let chunkCount: number | undefined;
         let indexError: string | undefined;
         try {
-          const result = await indexKnowledge(typeId);
+          const result = await indexKnowledge(typeId, {
+            reindexDocNames: uploaded.map((u) => u.name),
+          });
           chunkCount = result.chunkCount;
         } catch (e) {
           indexError = e instanceof Error ? e.message : String(e);
@@ -98,7 +103,7 @@ export async function POST(request: Request) {
       let chunkCount: number | undefined;
       let indexError: string | undefined;
       try {
-        const result = await indexKnowledge(typeId);
+        const result = await indexKnowledge(typeId, { reindexDocNames: saved });
         chunkCount = result.chunkCount;
       } catch (e) {
         indexError = e instanceof Error ? e.message : String(e);
@@ -140,11 +145,17 @@ export async function POST(request: Request) {
       const sessionId = (formData.get("sessionId") as string) || "default";
       const dir = getSessionDir(sessionId);
       const files = formData.getAll("files") as File[];
+      const projectAllowed = new Set(getProjectUploadExtensions());
+      const replaceExisting = formData.get("replace") !== "false";
+      if (replaceExisting) {
+        clearSessionProjectFiles(sessionId, [...projectAllowed]);
+        clearProjectIndex(sessionId);
+      }
       const saved: { name: string; path: string }[] = [];
       for (const file of files) {
         if (!file?.name) continue;
         const ext = path.extname(file.name).toLowerCase();
-        if (!ALLOWED_EXT.has(ext)) continue;
+        if (!projectAllowed.has(ext)) continue;
         const filename = sanitizeFilename(file.name);
         const filepath = path.join(dir, filename);
         const buf = Buffer.from(await file.arrayBuffer());
@@ -152,19 +163,23 @@ export async function POST(request: Request) {
         saved.push({ name: filename, path: filepath });
       }
       let projectChunkCount: number | undefined;
+      let structuredIndexed: boolean | undefined;
       let projectIndexError: string | undefined;
-      if (saved.length > 0) {
+      const allSessionPaths = listSessionProjectFilePaths(sessionId, [...projectAllowed]);
+      if (allSessionPaths.length > 0) {
         try {
-          const result = await indexProjectFiles(sessionId, saved.map((s) => s.path));
+          const result = await ingestProjectFiles(sessionId, allSessionPaths);
           projectChunkCount = result.chunkCount;
+          structuredIndexed = result.structuredFileCount > 0;
         } catch (e) {
           projectIndexError = e instanceof Error ? e.message : String(e);
         }
       }
       return NextResponse.json({
         saved: saved.map((s) => s.name),
-        paths: saved.map((s) => s.path),
+        paths: allSessionPaths.length > 0 ? allSessionPaths : saved.map((s) => s.path),
         projectChunkCount,
+        structuredIndexed,
         projectIndexError,
       });
     }

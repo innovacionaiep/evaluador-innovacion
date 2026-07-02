@@ -1,6 +1,6 @@
 import type { ExcelStructuredData } from "@/lib/excel-structured-extract";
 import type { ElementDef } from "@/lib/excel-heuristics";
-import { fuzzyMatchScore, normalizeForMatch } from "@/lib/hybrid-search";
+import { fuzzyMatchScore, normalizeForMatch } from "@/lib/text-match";
 import { loadProjectChunks } from "@/lib/project-vector-store";
 import type { StoredChunk } from "@/lib/vector-store";
 import {

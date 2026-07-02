@@ -1,4 +1,4 @@
-import { normalizeForMatch } from "@/lib/hybrid-search";
+import { normalizeForMatch } from "@/lib/text-match";
 import {
   isObjectiveGeneralElement,
   isSpecificObjectivesElement,

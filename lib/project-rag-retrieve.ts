@@ -1,4 +1,4 @@
-import { hybridRetrieve, type RetrievedChunk } from "@/lib/hybrid-search";
+import { hybridRetrieve, hybridRetrieveMulti, type RetrievedChunk } from "@/lib/hybrid-search";
 import { loadProjectChunks } from "@/lib/project-vector-store";
 import type { StoredChunk } from "@/lib/vector-store";
 
@@ -122,23 +122,15 @@ export async function retrieveProjectChunksMulti(
   const topK = options.topK ?? DEFAULT_TOP_K;
   const maxChars = options.maxRetrievedChars ?? DEFAULT_MAX_CHARS;
   const allChunks = loadProjectChunks(sessionId);
-  const byId = new Map<string, RetrievedChunk>();
-
-  for (const q of queries) {
-    const batch = await hybridRetrieve(allChunks, q, {
-      topK: Math.ceil(topK / queries.length) + 8,
-      maxRetrievedChars: Math.ceil(maxChars / queries.length) + 4000,
-      hybridVectorWeight: 0.5,
-    });
-    for (const c of batch) {
-      const prev = byId.get(c.id);
-      if (!prev || c.score > prev.score) byId.set(c.id, c);
-    }
-  }
-
-  const merged = [...byId.values()].sort((a, b) => b.score - a.score);
   const expand = options.expandNeighbors !== false;
-  const withNeighbors = applyNeighborExpansion(merged.slice(0, topK + 6), allChunks, expand);
+
+  const merged = await hybridRetrieveMulti(allChunks, queries, {
+    topK,
+    maxRetrievedChars: maxChars,
+    hybridVectorWeight: 0.5,
+  });
+
+  const withNeighbors = applyNeighborExpansion(merged, allChunks, expand);
   return trimToMaxChars(withNeighbors, maxChars);
 }
 

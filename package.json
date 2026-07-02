@@ -4,9 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "npx next dev",
+    "dev:webpack": "npx next dev --webpack",
     "build": "npx next build",
     "start": "npx next start",
     "lint": "eslint",
+    "typecheck": "tsc --noEmit",
     "test:extract": "npx tsx --test lib/extract-regression.test.ts"
   },
   "dependencies": {
@@ -19,7 +21,7 @@
     "pdf-parse": "^1.1.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "sharp": "^0.33.0"
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

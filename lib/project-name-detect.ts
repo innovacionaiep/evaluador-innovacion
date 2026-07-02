@@ -1,5 +1,5 @@
 import type { ExcelStructuredData, ExcelSheet } from "@/lib/excel-structured-extract";
-import { normalizeForMatch } from "@/lib/hybrid-search";
+import { normalizeForMatch } from "@/lib/text-match";
 import {
   isGanttColumnHeaderLabel,
   isLikelyGanttHeaderRowContent,

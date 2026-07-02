@@ -1,7 +1,13 @@
-import type { ExcelSheet, ExcelStructuredData } from "@/lib/excel-structured-extract";
-import { fuzzyMatchScore, normalizeForMatch } from "@/lib/hybrid-search";
+import type { ExcelSheet, ExcelStructuredData, ExcelMerge } from "@/lib/excel-structured-extract";
+import type { ElementDef } from "@/lib/excel-heuristics";
+import { fuzzyMatchScore, normalizeForMatch } from "@/lib/text-match";
 import { joinUniqueParts } from "@/lib/extract-content-clean";
-import { sortSheetsByPriority } from "@/lib/excel-sheet-priority";
+import {
+  isAcceptableExtractedContent,
+  isFocalizacionKeywordList,
+  looksLikeFormQuestionContent,
+} from "@/lib/extract-content-quality";
+import { sheetsForElement } from "@/lib/sheet-element-routing";
 
 type ElementLike = { title: string; description?: string };
 
@@ -10,15 +16,25 @@ const VALUE_MIN_COL = 2;
 
 const CONTINUITY_LABEL_RE =
   /continuidad.*fase\s+anterior|fase\s+anterior.*continuidad|es\s+continuidad\s+de/i;
-const PERTINENCIA_COMBINED_LABEL_RE = /pertinencia\s+local.*disciplinar|pertinencia\s+local\s+y\s+disciplinar/i;
+const PERTINENCIA_COMBINED_LABEL_RE =
+  /pertinencia\s+local.*disciplinar|pertinencia\s+local\s+y\s+disciplinar|local\s+y\s+disciplinar/i;
 const PERTINENCIA_LOCAL_INLINE_RE = /pertinencia\s+local\s*:?\s*/i;
 const PERTINENCIA_DISCIPLINAR_INLINE_RE = /pertinencia\s+disciplinar\s*:?\s*/i;
+/** Encabezados abreviados dentro del valor de celda fusionada (p. ej. "Local: … Disciplinar: …"). */
+const LOCAL_SHORT_HEADER_RE = /(?:^|[\n.])\s*Local\s*:\s*/i;
+const DISCIPLINAR_SHORT_HEADER_RE = /\bDisciplinar\s*:\s*/i;
 const FORM_ROW_TITLE_PATTERNS = [
   /necesidad|problema|oportunidad/,
   /publico\s+objetivo/,
   /perspectiva\s+de\s+genero|\bgenero\b/,
   /en\s+que\s+consiste|consiste\s+la\s+solucion/,
-  /ejes?\s+de\s+impacto/,
+  /ejes?\s+de\s+impacto|focalizaci/,
+  /sostenibilidad/,
+  /objetivo\s+de\s+desarrollo\s+sostenible|\bods\b/,
+  /resultados.*contribuci|contribuci.*esperada/,
+  /metodolog.*medici|medici.*resultado/,
+  /factor\s+innovador|innovador\s+del\s+proyecto/,
+  /escalabilidad/,
   /financiamiento/,
   /metodolog/,
   /justificaci/,
@@ -72,11 +88,96 @@ function getCell(map: Map<string, string>, row: number, col: number): string {
 
 function collectRowValue(map: Map<string, string>, row: number, fromCol: number): string {
   const parts: string[] = [];
-  for (let c = fromCol; c <= fromCol + 6; c++) {
+  for (let c = fromCol; c <= fromCol + 8; c++) {
     const v = getCell(map, row, c);
     if (v) parts.push(v);
   }
   return joinUniqueParts(parts);
+}
+
+function collectMergeContent(
+  map: Map<string, string>,
+  merge: ExcelMerge,
+  excludeRow?: number,
+  excludeCol?: number
+): string {
+  const parts: string[] = [];
+  for (let r = merge.startRow; r <= merge.endRow; r++) {
+    for (let c = merge.startCol; c <= merge.endCol; c++) {
+      if (r === excludeRow && c === excludeCol) continue;
+      const v = getCell(map, r, c);
+      if (v) parts.push(v);
+    }
+  }
+  return joinUniqueParts(parts);
+}
+
+function findMergeAt(merges: ExcelMerge[], row: number, col: number): ExcelMerge | null {
+  return (
+    merges.find(
+      (m) => row >= m.startRow && row <= m.endRow && col >= m.startCol && col <= m.endCol
+    ) ?? null
+  );
+}
+
+function collectRowValueWithMerges(
+  map: Map<string, string>,
+  merges: ExcelMerge[],
+  row: number,
+  fromCol: number
+): string {
+  const parts: string[] = [];
+  const seenMerges = new Set<string>();
+
+  for (let c = fromCol; c <= fromCol + 8; c++) {
+    const merge = findMergeAt(merges, row, c);
+    if (merge) {
+      const key = `${merge.startRow},${merge.startCol},${merge.endRow},${merge.endCol}`;
+      if (seenMerges.has(key)) continue;
+      seenMerges.add(key);
+      const text = collectMergeContent(map, merge);
+      if (text) parts.push(text);
+      continue;
+    }
+    const v = getCell(map, row, c);
+    if (v) parts.push(v);
+  }
+  return joinUniqueParts(parts);
+}
+
+/** Recoge respuesta en la misma fila o en filas siguientes hasta la próxima etiqueta. */
+function collectFormAnswer(
+  map: Map<string, string>,
+  merges: ExcelMerge[],
+  labelCell: { row: number; col: number; value: string },
+  labelCells: ExcelSheet["cells"]
+): string {
+  const sameRow = collectRowValueWithMerges(map, merges, labelCell.row, labelCell.col + 1);
+  let answer = toAnswerOnly(sameRow, labelCell.value);
+
+  if (answer.length >= 40 && !looksLikeFormQuestionContent(answer)) {
+    return answer;
+  }
+
+  const snippetLines: string[] = [];
+  for (let r = labelCell.row; r <= labelCell.row + 12; r++) {
+    const rowText = collectRowValueWithMerges(map, merges, r, labelCell.col + 1);
+    if (!rowText) continue;
+    if (r > labelCell.row) {
+      const labelInRow = labelCells.find((c) => c.row === r && c.col <= labelCell.col + 1);
+      if (labelInRow && labelInRow.row !== labelCell.row && looksLikeFormLabel(labelInRow.value)) {
+        break;
+      }
+    }
+    snippetLines.push(rowText);
+  }
+
+  const combined = toAnswerOnly(joinUniqueParts(snippetLines), labelCell.value);
+  if (combined.length > answer.length && !looksLikeFormQuestionContent(combined)) {
+    return combined;
+  }
+
+  return answer.length > sameRow.length ? answer : sameRow;
 }
 
 export function looksLikeFormLabel(text: string): boolean {
@@ -93,6 +194,27 @@ function scoreLabelMatch(label: string, element: ElementLike): number {
   const labelNorm = normalizeForMatch(label);
   const titleNorm = normalizeForMatch(element.title);
   if (!titleNorm) return 0;
+
+  if (/ejes?\s+de\s+impacto|focalizaci/.test(titleNorm) && /^focalizaci[oó]n$/.test(labelNorm)) {
+    return 0.1;
+  }
+
+  if (/escalabilidad/i.test(titleNorm) && /expandir|adopci|replicar|escalar|estrategia/i.test(labelNorm)) {
+    return 0.88;
+  }
+
+  if (/sostenibilidad/i.test(titleNorm) && /sostenibilidad/i.test(labelNorm)) {
+    return 0.9;
+  }
+
+  if (/objetivo de desarrollo sostenible|\bods\b/i.test(titleNorm) && /desarrollo sostenible|\bods\b/i.test(labelNorm)) {
+    return 0.88;
+  }
+
+  if (/factor innovador|innovador del proyecto/i.test(titleNorm) && /innovador/i.test(labelNorm)) {
+    return 0.88;
+  }
+
   if (labelNorm.includes(titleNorm)) return 0.95;
   if (titleNorm.includes(labelNorm) && labelNorm.length > 8) return 0.88;
 
@@ -109,7 +231,8 @@ function scoreLabelMatch(label: string, element: ElementLike): number {
 function extractGenericFormRow(
   element: ElementLike,
   labelCells: ExcelSheet["cells"],
-  map: Map<string, string>
+  map: Map<string, string>,
+  merges: ExcelMerge[]
 ): string {
   let best = "";
   let bestScore = 0;
@@ -118,11 +241,13 @@ function extractGenericFormRow(
     const score = scoreLabelMatch(labelCell.value, element);
     if (score < 0.52) continue;
 
-    const rowValue = collectRowValue(map, labelCell.row, labelCell.col + 1);
+    const rowValue = collectFormAnswer(map, merges, labelCell, labelCells);
     if (rowValue.length < 25) continue;
 
     const answer = toAnswerOnly(rowValue, labelCell.value);
-    if (answer.length < 40) continue;
+    if (answer.length < 15) continue;
+    if (looksLikeFormQuestionContent(answer)) continue;
+    if (isFocalizacionKeywordList(answer) && /ejes?\s+de\s+impacto|focalizaci/i.test(element.title)) continue;
     if (normalizeForMatch(answer) === normalizeForMatch(labelCell.value)) continue;
     if (looksLikeFormLabel(answer)) continue;
 
@@ -192,13 +317,35 @@ function toAnswerOnly(value: string, label: string): string {
   v = stripLeadingFormQuestions(v);
   return v.trim();
 }
+function findDisciplinarBoundary(text: string): number {
+  const candidates: number[] = [];
+  const full = text.match(PERTINENCIA_DISCIPLINAR_INLINE_RE);
+  if (full?.index != null && full.index > 0) candidates.push(full.index);
+  const short = text.match(DISCIPLINAR_SHORT_HEADER_RE);
+  if (short?.index != null && short.index > 0) candidates.push(short.index);
+  return candidates.length > 0 ? Math.min(...candidates) : -1;
+}
+
+function findLocalContentStart(text: string): number {
+  const full = text.match(PERTINENCIA_LOCAL_INLINE_RE);
+  if (full?.index != null) return full.index + full[0].length;
+  const short = text.match(LOCAL_SHORT_HEADER_RE);
+  if (short?.index != null) return short.index + short[0].length;
+  return 0;
+}
+
 function splitPertinenciaLocal(text: string, label = ""): string {
   const t = text.trim();
   if (!t) return "";
 
-  const discIdx = t.search(PERTINENCIA_DISCIPLINAR_INLINE_RE);
-  const localMatch = t.match(PERTINENCIA_LOCAL_INLINE_RE);
+  const discIdx = findDisciplinarBoundary(t);
+  const localStart = findLocalContentStart(t);
 
+  if (discIdx > localStart) {
+    return t.slice(localStart, discIdx).replace(/^y\s+disciplinar\.?\s*/i, "").trim();
+  }
+
+  const localMatch = t.match(PERTINENCIA_LOCAL_INLINE_RE);
   if (localMatch?.index != null) {
     let slice = t.slice(localMatch.index + localMatch[0].length);
     if (discIdx > localMatch.index) {
@@ -220,21 +367,32 @@ function splitPertinenciaLocal(text: string, label = ""): string {
 function splitPertinenciaDisciplinar(text: string): string {
   const t = text.trim();
   if (!t) return "";
-  const m = t.match(PERTINENCIA_DISCIPLINAR_INLINE_RE);
-  if (!m || m.index == null) return "";
-  return t.slice(m.index + m[0].length).trim();
+
+  const full = t.match(PERTINENCIA_DISCIPLINAR_INLINE_RE);
+  if (full?.index != null) return t.slice(full.index + full[0].length).trim();
+
+  const short = t.match(DISCIPLINAR_SHORT_HEADER_RE);
+  if (short?.index != null) return t.slice(short.index + short[0].length).trim();
+
+  return "";
+}
+
+function rowValueHasCombinedPertinencia(value: string): boolean {
+  return findDisciplinarBoundary(value) > 0;
 }
 
 function extractFromSheet(sheet: ExcelSheet, element: ElementLike): string {
   const map = buildCellMap(sheet.cells);
+  const merges = sheet.merges ?? [];
   const labelCells = sheet.cells
     .filter((c) => c.col <= VALUE_MIN_COL && looksLikeFormLabel(c.value))
     .sort((a, b) => a.row - b.row);
 
   for (const labelCell of labelCells) {
     const labelNorm = normalizeForMatch(labelCell.value);
-    const rowValue = collectRowValue(map, labelCell.row, labelCell.col + 1);
-    if (!rowValue || rowValue.length < 20) continue;
+    const rowValue = collectFormAnswer(map, merges, labelCell, labelCells);
+    if (!rowValue || rowValue.length < 15) continue;
+    if (looksLikeFormQuestionContent(rowValue)) continue;
 
     if (isContinuityElement(element) && CONTINUITY_LABEL_RE.test(labelNorm)) {
       return toAnswerOnly(rowValue, labelCell.value);
@@ -242,7 +400,7 @@ function extractFromSheet(sheet: ExcelSheet, element: ElementLike): string {
 
     if (
       (isPertinenciaLocalElement(element) || isPertinenciaDisciplinarElement(element)) &&
-      PERTINENCIA_COMBINED_LABEL_RE.test(labelNorm)
+      (PERTINENCIA_COMBINED_LABEL_RE.test(labelNorm) || rowValueHasCombinedPertinencia(rowValue))
     ) {
       if (isPertinenciaLocalElement(element)) {
         const local = splitPertinenciaLocal(rowValue, labelCell.value);
@@ -269,7 +427,7 @@ function extractFromSheet(sheet: ExcelSheet, element: ElementLike): string {
     !isPertinenciaLocalElement(element) &&
     !isPertinenciaDisciplinarElement(element)
   ) {
-    return extractGenericFormRow(element, labelCells, map);
+    return extractGenericFormRow(element, labelCells, map, merges);
   }
 
   return "";
@@ -282,9 +440,10 @@ export function extractFormRowFromExcel(
   if (!isFormRowElement(element)) return null;
 
   for (const file of structuredFiles) {
-    for (const sheet of sortSheetsByPriority(file.sheets)) {
+    const orderedSheets = sheetsForElement(element as ElementDef, file.sheets);
+    for (const sheet of orderedSheets) {
       const content = extractFromSheet(sheet, element);
-      if (content.length > 20) {
+      if (content.length > 20 && isAcceptableExtractedContent(element as ElementDef, content)) {
         return { content, confidence: 0.94 };
       }
     }

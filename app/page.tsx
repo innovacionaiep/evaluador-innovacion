@@ -8,17 +8,10 @@ import ConfigPanel from "@/components/ConfigPanel";
 import FullscreenOverlay, { ExpandIcon } from "@/components/FullscreenOverlay";
 import ProjectExtractedTable from "@/components/ProjectExtractedTable";
 import type { ChatMessage } from "@/components/ChatPanel";
-import type { AgentTraceEntry } from "@/lib/agent-events";
 import type { ProjectStructuredData } from "@/lib/build-context";
-import {
-  applyExtractStreamEvent,
-  createExtractStreamState,
-  formatExtractCompletionMessage,
-  knowledgePathsToLabels,
-  parseExtractNdjsonLine,
-} from "@/lib/extract-stream";
-import type { ExtractStreamEvent } from "@/lib/project-extract-pipeline";
-import { createStaggeredTraceReveal } from "@/lib/trace-reveal";
+import { useEvaluationConfig } from "@/hooks/useEvaluationConfig";
+import { useProjectExtract } from "@/hooks/useProjectExtract";
+import { isIncompleteElement } from "@/lib/project-extract-validate";
 
 type EvaluationType = { id: number; name: string };
 
@@ -55,22 +48,20 @@ export default function Home() {
   const [reportContent, setReportContent] = useState("");
   const [reportTitle, setReportTitle] = useState("TITULO DEL INFORME DE EVALUACIÓN");
   const [projectFilePaths, setProjectFilePaths] = useState<string[]>([]);
-  const [extractedProjectText, setExtractedProjectText] = useState("");
-  const [extractedProjectTable, setExtractedProjectTable] = useState<
-    { section?: string; element: string; content: string; incomplete?: boolean }[]
-  >([]);
-  const [extractedStructuredData, setExtractedStructuredData] = useState<ProjectStructuredData | null>(null);
-  const [extractedProjectLoading, setExtractedProjectLoading] = useState(false);
-  const [elementsWithSection, setElementsWithSection] = useState<{ title: string; section: string }[]>([]);
-  const [knowledgeDocNames, setKnowledgeDocNames] = useState<string[]>([]);
   const [projectSectionOpen, setProjectSectionOpen] = useState(true);
   const [fullscreenSection, setFullscreenSection] = useState<"project" | "report" | null>(null);
   const prevActiveTypeIdRef = useRef<number | null>(null);
-  const extractRevealRef = useRef<ReturnType<typeof createStaggeredTraceReveal> | null>(null);
-  const knowledgeDocNamesRef = useRef<string[]>([]);
-  const extractCompletionPendingRef = useRef<string | null>(null);
-  const extractTraceMsgIndexRef = useRef(-1);
-  const extractFullTraceRef = useRef<AgentTraceEntry[]>([]);
+
+  const { elementsWithSection, knowledgeDocNames } = useEvaluationConfig(activeTypeId, configOpen);
+
+  const {
+    extractedProjectText,
+    extractedProjectTable,
+    setExtractedProjectTable,
+    extractedStructuredData,
+    extractedProjectLoading,
+    resetExtract,
+  } = useProjectExtract(projectFilePaths, activeTypeId, SESSION_ID, knowledgeDocNames, setMessages);
 
   /** Al cambiar de tipo de evaluación, limpiar la UI principal (chat, informe, proyecto). */
   useEffect(() => {
@@ -79,14 +70,11 @@ export default function Home() {
       setMessages([]);
       setReportContent("");
       setProjectFilePaths([]);
-      setExtractedProjectText("");
-      setExtractedProjectTable([]);
-      setExtractedStructuredData(null);
-      setExtractedProjectLoading(false);
+      resetExtract();
       setFullscreenSection(null);
     }
     prevActiveTypeIdRef.current = activeTypeId;
-  }, [activeTypeId]);
+  }, [activeTypeId, resetExtract]);
 
   useEffect(() => {
     fetch("/api/evaluation-types")
@@ -105,281 +93,38 @@ export default function Home() {
     setReportTitle(t ? `Informe: ${t.name}` : "TITULO DEL INFORME DE EVALUACIÓN");
   }, [activeTypeId, evaluationTypes]);
 
-  useEffect(() => {
-    knowledgeDocNamesRef.current = knowledgeDocNames;
-  }, [knowledgeDocNames]);
-
-  useEffect(() => {
-    if (!activeTypeId) {
-      setElementsWithSection([]);
-      setKnowledgeDocNames([]);
-      return;
-    }
-    const loadConfig = () => {
-      fetch(`/api/config/${activeTypeId}`)
-        .then((r) => r.json())
-        .then((data) => {
-          const elements = Array.isArray(data.elements) ? data.elements : [];
-          const mapped = elements
-            .filter((e: unknown) => typeof e === "object" && e != null && "title" in e)
-            .map((e: { title?: string; section?: string }) => ({
-              title: String((e as { title: string }).title ?? "").trim(),
-              section: typeof (e as { section?: string }).section === "string" ? ((e as { section: string }).section ?? "General").trim() : "General",
-            }))
-            .filter((e: { title: string }) => e.title);
-          setElementsWithSection(mapped);
-          const paths = Array.isArray(data.knowledge_paths) ? data.knowledge_paths : [];
-          setKnowledgeDocNames(knowledgePathsToLabels(paths));
-        })
-        .catch(() => {
-          setElementsWithSection([]);
-          setKnowledgeDocNames([]);
-        });
-    };
-    loadConfig();
-  }, [activeTypeId, configOpen]);
-
-  const MAX_EXTRACT_RETRIES = 5;
-  const EXTRACT_RETRY_DELAY_MS = 3000;
-
-  useEffect(() => {
-    if (projectFilePaths.length === 0) {
-      setExtractedProjectText("");
-      setExtractedProjectTable([]);
-      setExtractedStructuredData(null);
-      setExtractedProjectLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    let currentController: AbortController | null = null;
-
-    const applyDonePayload = (event: Extract<ExtractStreamEvent, { type: "done" }>) => {
-      const text = typeof event.text === "string" ? event.text : "";
-      const table = Array.isArray(event.elementsTable)
-        ? event.elementsTable.map((r) => ({
-            section: r.section,
-            element: r.element,
-            content: r.content,
-            incomplete: r.incomplete,
-          }))
-        : [];
-      const sd = event.structuredData;
-      setExtractedProjectText(text);
-      setExtractedProjectTable(table);
-      setExtractedStructuredData(sd && "files" in sd && sd.files?.length ? sd : null);
-      setExtractedProjectLoading(false);
-    };
-
-    const appendExtractCompletion = () => {
-      const msg = extractCompletionPendingRef.current;
-      if (!msg) return;
-      extractCompletionPendingRef.current = null;
-      const fullTrace = extractFullTraceRef.current;
-
-      setMessages((prev) => {
-        const next = [...prev];
-        const traceIdx = extractTraceMsgIndexRef.current;
-        if (traceIdx >= 0 && traceIdx < next.length && next[traceIdx]?.role === "assistant") {
-          next[traceIdx] = {
-            ...next[traceIdx],
-            trace: fullTrace.map((t) => ({ ...t, live: false })),
-            traceRevealing: false,
-            content: "",
-          };
-        }
-        const alreadyHas = next.some(
-          (m, i) =>
-            i !== traceIdx &&
-            m.role === "assistant" &&
-            m.content === msg &&
-            !(m.trace?.length || m.traceRevealing)
-        );
-        if (!alreadyHas) {
-          next.push({ role: "assistant", content: msg });
-        }
-        return next;
+  const mergeProjectElementsFromChat = (updated: { element: string; content: string }[]) => {
+    setExtractedProjectTable((prev) => {
+      const byTitle = new Map(updated.map((r) => [r.element, r.content]));
+      return prev.map((row) => {
+        const newContent = byTitle.get(row.element);
+        if (newContent === undefined) return row;
+        const cfg = elementsWithSection.find((e) => e.title === row.element);
+        const def = cfg
+          ? { title: cfg.title, description: cfg.description, section: cfg.section }
+          : { title: row.element, description: "", section: row.section ?? "General" };
+        return {
+          ...row,
+          content: newContent,
+          incomplete: isIncompleteElement(def, newContent),
+        };
       });
+    });
+  };
 
-      extractRevealRef.current?.destroy();
-      extractRevealRef.current = null;
-      extractTraceMsgIndexRef.current = -1;
-    };
-
-    const startExtractMessage = () => {
-      extractRevealRef.current?.destroy();
-      extractTraceMsgIndexRef.current = -1;
-      extractFullTraceRef.current = [];
-      const reveal = createStaggeredTraceReveal((revealed) => {
-        setMessages((prev) => {
-          const next = [...prev];
-          const traceIdx = extractTraceMsgIndexRef.current;
-          if (traceIdx < 0 || traceIdx >= next.length || next[traceIdx]?.role !== "assistant") {
-            return next;
-          }
-          next[traceIdx] = {
-            ...next[traceIdx],
-            content: "",
-            trace: revealed.trace,
-            traceRevealing: revealed.revealing,
-          };
-          return next;
-        });
-        if (!revealed.revealing && extractCompletionPendingRef.current) {
-          appendExtractCompletion();
-        }
-      });
-      reveal.onFullyRevealed(() => {
-        if (extractCompletionPendingRef.current) {
-          appendExtractCompletion();
-        }
-      });
-      extractRevealRef.current = reveal;
-      setMessages((prev) => {
-        const next: ChatMessage[] = [
-          ...prev,
-          { role: "assistant", content: "", trace: [], traceRevealing: true },
-        ];
-        extractTraceMsgIndexRef.current = next.length - 1;
-        return next;
-      });
-      return reveal;
-    };
-
-    const processExtractEvent = (
-      event: ExtractStreamEvent,
-      streamState: ReturnType<typeof createExtractStreamState>,
-      reveal: ReturnType<typeof createStaggeredTraceReveal>,
-      live: boolean
-    ) => {
-      if (event.type === "error") throw new Error(event.error);
-      const nextState = applyExtractStreamEvent(streamState, event, live);
-      const trace = nextState.trace.map((t) => ({ ...t, live: live && t.live }));
-      extractFullTraceRef.current = trace;
-      if (event.type === "done") {
-        extractCompletionPendingRef.current = formatExtractCompletionMessage(
-          knowledgeDocNamesRef.current
-        );
-        applyDonePayload(event);
-      }
-      reveal.setState(trace, "");
-      return nextState;
-    };
-
-    const doFetch = (attempt: number) => {
-      if (cancelled) return;
-      extractCompletionPendingRef.current = null;
-      const reveal = startExtractMessage();
-      let streamState = createExtractStreamState();
-      currentController = new AbortController();
-      fetch("/api/project-extract", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectFilePaths,
-          evaluationTypeId: activeTypeId ?? undefined,
-          sessionId: SESSION_ID,
-          stream: true,
-        }),
-        signal: currentController.signal,
-      })
-        .then(async (res) => {
-          if (!res.ok) {
-            const data = await res.json().catch(() => ({}));
-            throw new Error(data?.error || res.statusText);
-          }
-          const reader = res.body?.getReader();
-          if (!reader) throw new Error("No response body");
-          const decoder = new TextDecoder();
-          let buffer = "";
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() ?? "";
-            for (const line of lines) {
-              const event = parseExtractNdjsonLine(line);
-              if (!event) continue;
-              streamState = processExtractEvent(event, streamState, reveal, true);
-            }
-          }
-          if (buffer.trim()) {
-            const event = parseExtractNdjsonLine(buffer);
-            if (event) {
-              streamState = processExtractEvent(event, streamState, reveal, false);
-            }
-          }
-          if (!extractCompletionPendingRef.current) {
-            extractCompletionPendingRef.current = formatExtractCompletionMessage(
-              knowledgeDocNamesRef.current
-            );
-            streamState = applyExtractStreamEvent(streamState, { type: "done", text: "" }, false);
-            extractFullTraceRef.current = streamState.trace;
-            reveal.setState(streamState.trace, "");
-          }
-          if (extractCompletionPendingRef.current) {
-            reveal.onFullyRevealed(() => {
-              if (extractCompletionPendingRef.current) {
-                appendExtractCompletion();
-              }
-            });
-          }
-        })
-        .catch((err) => {
-          extractCompletionPendingRef.current = null;
-          extractRevealRef.current?.flushAll();
-          setExtractedProjectText("");
-          setExtractedProjectTable([]);
-          setExtractedStructuredData(null);
-          const msg = err?.message?.includes("429")
-            ? "Extracción fallida: límite de uso temporal. Reintente en unos momentos."
-            : "Extracción fallida.";
-          setMessages((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last?.role === "assistant" && last.traceRevealing) {
-              next[next.length - 1] = {
-                ...last,
-                content: msg,
-                traceRevealing: false,
-              };
-            } else {
-              next.push({ role: "assistant", content: msg });
-            }
-            return next;
-          });
-          if (
-            attempt < MAX_EXTRACT_RETRIES - 1 &&
-            err?.message?.includes("429") &&
-            !cancelled
-          ) {
-            setTimeout(() => {
-              if (cancelled) return;
-              setMessages((prev) => [
-                ...prev,
-                {
-                  role: "assistant",
-                  content: `Reintentando extracción (intento ${attempt + 2}/${MAX_EXTRACT_RETRIES})…`,
-                },
-              ]);
-              doFetch(attempt + 1);
-            }, EXTRACT_RETRY_DELAY_MS);
-          } else {
-            setExtractedProjectLoading(false);
-          }
-        });
-    };
-
-    setExtractedProjectLoading(true);
-    doFetch(0);
-
-    return () => {
-      cancelled = true;
-      currentController?.abort();
-      extractRevealRef.current?.destroy();
-    };
-  }, [projectFilePaths, activeTypeId]);
+  const tableRows =
+    extractedProjectTable.length > 0
+      ? extractedProjectTable.map((r) => ({
+          section: r.section ?? "—",
+          element: r.element,
+          content: r.content,
+          incomplete: r.incomplete,
+        }))
+      : parseElementoContenido(extractedProjectText?.trim() || "").map(([elem, cont]) => ({
+          section: "—",
+          element: elem,
+          content: cont,
+        }));
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-gray-100 dark:bg-[#1e1e1e]">
@@ -401,8 +146,13 @@ export default function Home() {
             projectFilePaths={projectFilePaths}
             onProjectFilePathsChange={setProjectFilePaths}
             projectElementsTable={extractedProjectTable}
-            projectStructuredData={extractedStructuredData ?? undefined}
+            projectStructuredData={
+              !extractedProjectTable.length && extractedStructuredData
+                ? (extractedStructuredData as ProjectStructuredData)
+                : undefined
+            }
             sessionId={SESSION_ID}
+            onProjectElementsTableChange={mergeProjectElementsFromChat}
           />
         </div>
         <div className="flex min-w-0 flex-1 flex-col">
@@ -437,20 +187,7 @@ export default function Home() {
                     "Extrayendo con IA…"
                   ) : (
                     <ProjectExtractedTable
-                      rows={
-                        extractedProjectTable.length > 0
-                          ? extractedProjectTable.map((r) => ({
-                              section: r.section ?? "—",
-                              element: r.element,
-                              content: r.content,
-                              incomplete: r.incomplete,
-                            }))
-                          : parseElementoContenido(extractedProjectText?.trim() || "").map(([elem, cont]) => ({
-                              section: "—",
-                              element: elem,
-                              content: cont,
-                            }))
-                      }
+                      rows={tableRows}
                       elementsWithSection={elementsWithSection}
                       extractedProjectText={extractedProjectText}
                     />
@@ -460,10 +197,10 @@ export default function Home() {
             </div>
             <div className="min-h-0 flex-1 flex flex-col">
               <ReportPanel
-              title={reportTitle}
-              body={reportContent}
-              onFullscreenRequest={() => setFullscreenSection("report")}
-            />
+                title={reportTitle}
+                body={reportContent}
+                onFullscreenRequest={() => setFullscreenSection("report")}
+              />
             </div>
           </div>
         </div>
@@ -483,20 +220,7 @@ export default function Home() {
               "Extrayendo con IA…"
             ) : (
               <ProjectExtractedTable
-                rows={
-                  extractedProjectTable.length > 0
-                    ? extractedProjectTable.map((r) => ({
-                        section: r.section ?? "—",
-                        element: r.element,
-                        content: r.content,
-                        incomplete: r.incomplete,
-                      }))
-                    : parseElementoContenido(extractedProjectText?.trim() || "").map(([elem, cont]) => ({
-                        section: "—",
-                        element: elem,
-                        content: cont,
-                      }))
-                }
+                rows={tableRows}
                 elementsWithSection={elementsWithSection}
                 extractedProjectText={extractedProjectText}
               />

@@ -1,5 +1,5 @@
 import type { ExcelSheet, ExcelStructuredData, ExcelCell } from "@/lib/excel-structured-extract";
-import { normalizeForMatch } from "@/lib/hybrid-search";
+import { normalizeForMatch } from "@/lib/text-match";
 import { joinUniqueParts } from "@/lib/extract-content-clean";
 import { sortSheetsByPriority } from "@/lib/excel-sheet-priority";
 

@@ -39,7 +39,7 @@ async function extractFileSegments(
     return text ? [{ docName, text }] : [];
   }
 
-  if (ext === ".xlsx") {
+  if (ext === ".xlsx" || ext === ".xls") {
     try {
       const data = await extractExcelToStructuredJson(filePath);
       const parts = data.sheets.map((s) => excelSheetToText(docName, s));

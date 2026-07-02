@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { ExpandIcon } from "@/components/FullscreenOverlay";
+import LlmConfigModal from "@/components/LlmConfigModal";
 
 type EvaluationType = { id: number; name: string };
 type KnowledgeItem = string | { name: string; url: string };
@@ -48,6 +49,7 @@ export default function ConfigPanel({
   const [saving, setSaving] = useState(false);
   const [indexingKnowledge, setIndexingKnowledge] = useState(false);
   const [knowledgeIndexStatus, setKnowledgeIndexStatus] = useState<string | null>(null);
+  const [llmConfigOpen, setLlmConfigOpen] = useState(false);
   const [ragStatus, setRagStatus] = useState<{
     hasIndex: boolean;
     chunkCount: number;
@@ -411,6 +413,13 @@ export default function ConfigPanel({
         <div className="flex shrink-0 items-center justify-between border-b border-gray-200 px-6 py-4 dark:border-gray-600">
           <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Configuración</h2>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setLlmConfigOpen(true)}
+              className="rounded border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+            >
+              Configurar LLM
+            </button>
             {selectedTypeId && (
               <button
                 type="button"
@@ -1034,6 +1043,7 @@ export default function ConfigPanel({
           </div>
         )}
       </div>
+      <LlmConfigModal isOpen={llmConfigOpen} onClose={() => setLlmConfigOpen(false)} />
     </div>
   );
 }

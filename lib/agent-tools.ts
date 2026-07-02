@@ -10,10 +10,11 @@ import { summarizeChunks } from "@/lib/agent-events";
 import { CONTEXT_LIMITS } from "@/lib/rag-limits";
 import type { ContextPlan } from "@/lib/context-plan";
 import type { ProjectStructuredData } from "@/lib/build-context";
-import { retryExtractElement } from "@/lib/project-extract-pipeline";
+import { searchProjectForQuery } from "@/lib/project-extract-tools";
 
 export type AgentToolName =
   | "search_knowledge"
+  | "search_project"
   | "get_rubric"
   | "get_config"
   | "get_project_elements"
@@ -21,6 +22,7 @@ export type AgentToolName =
 
 export type AgentArtifacts = {
   knowledgeChunks: RetrievedChunk[];
+  projectSearchSnippets: string[];
   rubricText?: string;
   configSections: Record<string, string>;
   projectElements: { element: string; content: string }[];
@@ -30,6 +32,7 @@ export type AgentArtifacts = {
 export function createEmptyArtifacts(): AgentArtifacts {
   return {
     knowledgeChunks: [],
+    projectSearchSnippets: [],
     configSections: {},
     projectElements: [],
     toolLog: [],
@@ -56,6 +59,21 @@ export const AGENT_TOOL_DEFINITIONS = [
         type: "object",
         properties: {
           query: { type: "string", description: "Consulta de búsqueda en español o inglés" },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "search_project",
+      description:
+        "Busca fragmentos relevantes en los archivos del proyecto subido (RAG de sesión). Usar para preguntas sobre el contenido del proyecto.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Consulta de búsqueda en español" },
         },
         required: ["query"],
       },
@@ -184,6 +202,22 @@ export async function executeAgentTool(
       return { summary, ok: chunks.length > 0 };
     }
 
+    case "search_project": {
+      const query = typeof args.query === "string" ? args.query.trim() : "";
+      const sessionId = ctx.sessionId ?? "default";
+      if (!query) {
+        return { summary: "Se requiere una consulta de búsqueda.", ok: false };
+      }
+      const text = await searchProjectForQuery(sessionId, query);
+      if (!text.trim()) {
+        return { summary: "No se encontraron fragmentos en el proyecto para esta consulta.", ok: false };
+      }
+      artifacts.projectSearchSnippets.push(text);
+      const summary = `Fragmentos del proyecto (${text.length} caracteres): ${text.slice(0, 300)}${text.length > 300 ? "…" : ""}`;
+      artifacts.toolLog.push({ tool, summary: `Recuperados fragmentos del proyecto (${text.length} chars).` });
+      return { summary, ok: true };
+    }
+
     case "get_rubric": {
       const config = await getConfig(ctx.evaluationTypeId);
       const text = (config?.rubric_prompt ?? "").trim();
@@ -250,6 +284,7 @@ export async function executeAgentTool(
       if (paths.length === 0) {
         return { summary: "No hay archivos del proyecto para re-extraer.", ok: false };
       }
+      const { retryExtractElement } = await import("@/lib/project-extract-pipeline");
       const result = await retryExtractElement({
         sessionId: ctx.sessionId ?? "default",
         evaluationTypeId: ctx.evaluationTypeId,
@@ -287,6 +322,9 @@ export async function runPlannedTools(
     if (hint === "search_knowledge" && ctx.plan.sources.includes("knowledge_rag")) {
       await executeAgentTool("search_knowledge", { query: ctx.plan.ragQuery }, ctx, artifacts);
     }
+    if (hint === "search_project" && ctx.plan.sources.includes("project")) {
+      await executeAgentTool("search_project", { query: ctx.plan.ragQuery }, ctx, artifacts);
+    }
     if (hint === "get_rubric" && ctx.plan.sources.includes("rubric")) {
       await executeAgentTool("get_rubric", {}, ctx, artifacts);
     }
@@ -294,9 +332,14 @@ export async function runPlannedTools(
       await executeAgentTool("get_project_elements", {}, ctx, artifacts);
     }
     if (hint === "reextract_project_element") {
-      const empty = (ctx.projectElementsTable ?? []).find((r) => !r.content.trim());
-      if (empty) {
-        await executeAgentTool("reextract_project_element", { element: empty.element }, ctx, artifacts);
+      const emptyRows = (ctx.projectElementsTable ?? []).filter((r) => !r.content.trim());
+      for (const empty of emptyRows) {
+        await executeAgentTool(
+          "reextract_project_element",
+          { element: empty.element },
+          ctx,
+          artifacts
+        );
       }
     }
     if (hint === "get_config") {

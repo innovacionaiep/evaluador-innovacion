@@ -3,6 +3,7 @@ import { buildSystemContext, type ProjectStructuredData } from "@/lib/build-cont
 import { streamChatDetailed, chatCompletionWithTools } from "@/lib/openrouter";
 import { routeContextPlan, planSourcesSummary } from "@/lib/context-router";
 import type { ContextPlan } from "@/lib/context-plan";
+import { includesSource } from "@/lib/context-plan";
 import type { ChatStreamEvent } from "@/lib/agent-events";
 import { hasActiveKnowledgeIndex, isKnowledgeConfigured } from "@/lib/knowledge-config";
 import {
@@ -31,8 +32,15 @@ const TOOL_LOOP_SYSTEM = `Eres un agente recopilador de contexto para un evaluad
 Llama herramientas para reunir información. Cuando tengas suficiente, responde con un mensaje que empiece por LISTO: y un breve resumen.
 No respondas a la pregunta del usuario todavía.`;
 
-function buildResponseRules(plan: ContextPlan, hasRubric: boolean): string {
-  const parts: string[] = [...plan.responseRules];
+function buildResponseRules(
+  plan: ContextPlan,
+  hasRubric: boolean,
+  rubricInContext: boolean
+): string {
+  let parts = [...plan.responseRules];
+  if (rubricInContext) {
+    parts = parts.filter((r) => !/PROHIBIDO.*r[uú]brica/i.test(r));
+  }
   if (!hasRubric && plan.sources.includes("rubric")) {
     parts.push(
       "No hay rúbrica configurada. Si preguntan por criterios de evaluación, indícalo."
@@ -207,9 +215,17 @@ export async function* runChatAgent(input: ChatAgentInput): AsyncGenerator<ChatS
   };
 
   const artifacts = createEmptyArtifacts();
+  const initialElementsKey = JSON.stringify(input.projectElementsTable ?? []);
 
   if (plan.useToolLoop && (plan.agentLevel === "B" || plan.agentLevel === "C")) {
     yield* runToolLoop(plan, input, artifacts);
+  }
+
+  const updatedElementsKey = JSON.stringify(
+    artifacts.projectElements.length > 0 ? artifacts.projectElements : (input.projectElementsTable ?? [])
+  );
+  if (artifacts.projectElements.length > 0 && updatedElementsKey !== initialElementsKey) {
+    yield { type: "project_elements_updated", elements: artifacts.projectElements };
   }
 
   const skipKnowledgeInBuild =
@@ -238,11 +254,15 @@ export async function* runChatAgent(input: ChatAgentInput): AsyncGenerator<ChatS
 
   for (const e of contextEvents) yield e;
 
+  const rubricInContext =
+    hasRubric &&
+    (includesSource(plan, "rubric") || !!artifacts.rubricText?.trim());
+
   const languageInstruction =
     "Responde siempre en español. Todas tus respuestas deben estar escritas íntegramente en español.\n\n";
   const baseInstruction =
     "Eres un asistente experto en evaluación de proyectos. Responde con claridad y basándote solo en el contexto proporcionado.\n\nREGLA OBLIGATORIA para objetivos: Si preguntan por el objetivo general o los objetivos específicos del proyecto, cita ÚNICAMENTE el texto de la sección del proyecto. No parafrasees.\n\nNo uses nunca las etiquetas <think> ni </think> en tus respuestas.";
-  const rulesBlock = buildResponseRules(plan, hasRubric);
+  const rulesBlock = buildResponseRules(plan, hasRubric, rubricInContext);
   const systemMessage =
     (rulesBlock ? `REGLAS DE RESPUESTA:\n${rulesBlock}\n\n---\n\n` : "") +
     languageInstruction +

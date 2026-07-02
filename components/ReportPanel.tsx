@@ -1,13 +1,6 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Document, Page, Text, View, StyleSheet, pdf } from "@react-pdf/renderer";
-
-const styles = StyleSheet.create({
-  page: { padding: 40, fontSize: 11, fontFamily: "Helvetica" },
-  title: { fontSize: 16, marginBottom: 20, fontWeight: "bold" },
-  body: { fontSize: 11, lineHeight: 1.5, whiteSpace: "pre-wrap" },
-});
 
 const ExpandIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -33,23 +26,31 @@ export default function ReportPanel({
     }
   }, [body]);
 
-  const handleExportPdf = () => {
-    const doc = (
-      <Document>
-        <Page size="A4" style={styles.page}>
-          <Text style={styles.title}>{title || "Informe de evaluación"}</Text>
-          <Text style={styles.body}>{body || "El informe aparecerá aquí al ejecutar la evaluación."}</Text>
-        </Page>
-      </Document>
-    );
-    pdf(doc).toBlob().then((blob) => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "informe-evaluacion.pdf";
-      a.click();
-      URL.revokeObjectURL(url);
+  const handleExportPdf = async () => {
+    const { Document: Doc, Page: PdfPage, Text: PdfText, StyleSheet: SS, pdf: pdfFn } =
+      await import("@react-pdf/renderer");
+    const pdfStyles = SS.create({
+      page: { padding: 40, fontSize: 11, fontFamily: "Helvetica" },
+      title: { fontSize: 16, marginBottom: 20, fontWeight: "bold" },
+      body: { fontSize: 11, lineHeight: 1.5, whiteSpace: "pre-wrap" },
     });
+    const doc = (
+      <Doc>
+        <PdfPage size="A4" style={pdfStyles.page}>
+          <PdfText style={pdfStyles.title}>{title || "Informe de evaluación"}</PdfText>
+          <PdfText style={pdfStyles.body}>
+            {body || "El informe aparecerá aquí al ejecutar la evaluación."}
+          </PdfText>
+        </PdfPage>
+      </Doc>
+    );
+    const blob = await pdfFn(doc).toBlob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "informe-evaluacion.pdf";
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -81,17 +82,17 @@ export default function ReportPanel({
           )}
           <button
             type="button"
-            onClick={handleExportPdf}
-            className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 dark:border-gray-600 dark:bg-[#374151] dark:text-gray-200 dark:hover:bg-[#4b5563]"
+            onClick={() => void handleExportPdf()}
+            className="rounded px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-500 dark:text-gray-200 dark:hover:bg-gray-700"
           >
-            PDF
+            Exportar PDF
           </button>
         </div>
       </div>
       {expanded && (
         <div
           ref={scrollRef}
-          className="min-h-0 flex-1 overflow-y-auto px-4 py-3 text-gray-800 dark:text-gray-200"
+          className="min-h-0 flex-1 overflow-y-auto px-4 py-3 text-sm text-gray-800 dark:text-gray-200"
           style={{ whiteSpace: "pre-wrap" }}
         >
           {body || "Cuerpo del informe de evaluación. Ejecute \"Evaluar\" para generar el informe."}

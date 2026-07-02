@@ -1,13 +1,27 @@
 /**
  * OpenRouter API (OpenAI-compatible). https://openrouter.ai/
- * Uses OPENROUTER_API_KEY and the model id (default: openrouter/free).
+ * API keys y modelos: lib/llm-config-server.ts (UI «Configurar LLM») con fallback a .env.
  */
 
+import "server-only";
+
+import {
+  getApiKey,
+  resolveModelForUseCase,
+} from "@/lib/llm-config-server";
+import type { LlmUseCase } from "@/lib/llm-config-types";
+
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
-const DEFAULT_MODEL = "openrouter/free";
-const EXTRACT_VISION_MODEL = "openrouter/free";
-const DEFAULT_EMBEDDING_MODEL = "nvidia/llama-nemotron-embed-vl-1b-v2:free";
+const DEFAULT_MODEL = "openai/gpt-4o";
+const DEFAULT_EMBEDDING_MODEL = "openai/text-embedding-3-small";
 const EMBEDDING_BATCH_SIZE = 16;
+
+export type OpenRouterCallOptions = {
+  temperature?: number;
+  max_tokens?: number;
+  model?: string;
+  useCase?: LlmUseCase;
+};
 
 function openRouterHeaders(apiKey: string): Record<string, string> {
   return {
@@ -17,16 +31,70 @@ function openRouterHeaders(apiKey: string): Record<string, string> {
   };
 }
 
-/** Reintentos ante 429 (rate limit) y 402 (límite de gasto / proveedor gratuito). */
-const MAX_LLM_RETRIES = 4;
+/** Reintentos breves ante 429/402 (misma clave y modelo). */
+const MAX_LLM_RETRIES = 3;
 const RETRY_BASE_MS = 2000;
 
-function getApiKey(): string {
-  const key = process.env.OPENROUTER_API_KEY;
-  if (!key?.trim()) {
-    throw new Error("OPENROUTER_API_KEY is not set in environment");
+function retryDelayMs(attempt: number): number {
+  return RETRY_BASE_MS * Math.pow(2, Math.min(attempt - 1, 2));
+}
+
+async function runWithRetries<T>(
+  useCase: LlmUseCase,
+  run: (model: string, apiKey: string) => Promise<T>,
+  options?: { modelOverride?: string; formatError?: boolean }
+): Promise<T> {
+  const model = resolveModelForUseCase(useCase, options?.modelOverride);
+  const apiKey = getApiKey();
+  let lastErr: unknown;
+
+  for (let attempt = 1; attempt <= MAX_LLM_RETRIES; attempt++) {
+    try {
+      return await run(model, apiKey);
+    } catch (e) {
+      lastErr = e;
+      if (!isRetryableProviderError(e) || attempt === MAX_LLM_RETRIES) {
+        if (options?.formatError) throw new Error(formatProviderError(e));
+        throw e;
+      }
+      await sleep(retryDelayMs(attempt));
+    }
   }
-  return key.trim();
+  if (options?.formatError) throw new Error(formatProviderError(lastErr));
+  throw lastErr;
+}
+
+/** Mensaje legible para el usuario (evita JSON crudo de OpenRouter). */
+export function formatProviderError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (raw.includes("429")) {
+    let model = "el modelo configurado";
+    try {
+      const jsonStart = raw.indexOf("{");
+      if (jsonStart >= 0) {
+        const parsed = JSON.parse(raw.slice(jsonStart)) as {
+          error?: { metadata?: { raw?: string } };
+        };
+        const upstream = parsed.error?.metadata?.raw ?? "";
+        const m = upstream.match(/[\w-]+\/[\w.:+-]+/) ?? raw.match(/[\w-]+\/[\w.:+-]+/);
+        if (m) model = m[0];
+      }
+    } catch {
+      const m = raw.match(/[\w-]+\/[\w.:+-]+/);
+      if (m) model = m[0];
+    }
+    return (
+      `Límite de tasa del proveedor (${model}): OpenRouter rechazó la petición tras varios reintentos. ` +
+      `Espere un momento y vuelva a intentar, o revise el modelo en Configurar LLM.`
+    );
+  }
+  if (raw.includes("402")) {
+    return (
+      "Crédito insuficiente en OpenRouter. Revise el saldo de su cuenta o el modelo configurado."
+    );
+  }
+  if (raw.length > 280) return raw.slice(0, 280) + "…";
+  return raw;
 }
 
 /** Errores que OpenRouter puede resolver en otro intento (429 rate limit, 402 spend limit). */
@@ -41,18 +109,16 @@ function sleep(ms: number): Promise<void> {
 
 export async function* streamChat(
   messages: { role: "system" | "user" | "assistant"; content: string }[],
-  options?: { temperature?: number; max_tokens?: number; model?: string }
+  options?: OpenRouterCallOptions
 ): AsyncGenerator<string, void, unknown> {
-  const apiKey = getApiKey();
-  const model = options?.model ?? process.env.OPENROUTER_MODEL ?? DEFAULT_MODEL;
+  const useCase = options?.useCase ?? "evaluate";
   const maxTokens = options?.max_tokens ?? 8192;
   const temperature = options?.temperature ?? 0.3;
 
-  let res: Response;
-  let lastErr: unknown;
-  for (let attempt = 1; attempt <= MAX_LLM_RETRIES; attempt++) {
-    try {
-      res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+  const res = await runWithRetries(
+    useCase,
+    async (model, apiKey) => {
+      const response = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
         method: "POST",
         headers: openRouterHeaders(apiKey),
         body: JSON.stringify({
@@ -63,20 +129,16 @@ export async function* streamChat(
           temperature,
         }),
       });
-      if (!res.ok) {
-        const errBody = await res.text();
-        throw new Error(`${res.status} ${errBody}`);
+      if (!response.ok) {
+        const errBody = await response.text();
+        throw new Error(`${response.status} ${errBody}`);
       }
-      lastErr = null;
-      break;
-    } catch (e) {
-      lastErr = e;
-      if (!isRetryableProviderError(e) || attempt === MAX_LLM_RETRIES) throw e;
-      await sleep(RETRY_BASE_MS * Math.pow(2, attempt - 1));
-    }
-  }
-  if (lastErr != null) throw lastErr;
-  const reader = res!.body?.getReader();
+      return response;
+    },
+    { modelOverride: options?.model }
+  );
+
+  const reader = res.body?.getReader();
   if (!reader) throw new Error("No response body");
 
   const decoder = new TextDecoder();
@@ -165,18 +227,16 @@ function* drainThinkSplitter(splitter: { inThink: boolean; carry: string }): Gen
 /** Igual que streamChat pero distingue razonamiento (thinking) de la respuesta final. */
 export async function* streamChatDetailed(
   messages: { role: "system" | "user" | "assistant"; content: string }[],
-  options?: { temperature?: number; max_tokens?: number; model?: string }
+  options?: OpenRouterCallOptions
 ): AsyncGenerator<ChatStreamPart, void, unknown> {
-  const apiKey = getApiKey();
-  const model = options?.model ?? process.env.OPENROUTER_MODEL ?? DEFAULT_MODEL;
+  const useCase = options?.useCase ?? "chat";
   const maxTokens = options?.max_tokens ?? 8192;
   const temperature = options?.temperature ?? 0.3;
 
-  let res: Response;
-  let lastErr: unknown;
-  for (let attempt = 1; attempt <= MAX_LLM_RETRIES; attempt++) {
-    try {
-      res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+  const res = await runWithRetries(
+    useCase,
+    async (model, apiKey) => {
+      const response = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
         method: "POST",
         headers: openRouterHeaders(apiKey),
         body: JSON.stringify({
@@ -187,21 +247,16 @@ export async function* streamChatDetailed(
           temperature,
         }),
       });
-      if (!res.ok) {
-        const errBody = await res.text();
-        throw new Error(`${res.status} ${errBody}`);
+      if (!response.ok) {
+        const errBody = await response.text();
+        throw new Error(`${response.status} ${errBody}`);
       }
-      lastErr = null;
-      break;
-    } catch (e) {
-      lastErr = e;
-      if (!isRetryableProviderError(e) || attempt === MAX_LLM_RETRIES) throw e;
-      await sleep(RETRY_BASE_MS * Math.pow(2, attempt - 1));
-    }
-  }
-  if (lastErr != null) throw lastErr;
+      return response;
+    },
+    { modelOverride: options?.model, formatError: true }
+  );
 
-  const reader = res!.body?.getReader();
+  const reader = res.body?.getReader();
   if (!reader) throw new Error("No response body");
 
   const decoder = new TextDecoder();
@@ -246,18 +301,14 @@ export type VisionMessageContent =
 /** Chat completion with vision (no stream). For document extraction. */
 export async function chatCompletionVision(
   messages: { role: "system" | "user" | "assistant"; content: string | VisionMessageContent[] }[],
-  options?: { max_tokens?: number; model?: string }
+  options?: { max_tokens?: number; model?: string; useCase?: LlmUseCase }
 ): Promise<string> {
-  const apiKey = getApiKey();
-  const model =
-    options?.model ??
-    process.env.OPENROUTER_EXTRACT_MODEL ??
-    EXTRACT_VISION_MODEL;
+  const useCase = options?.useCase ?? "vision";
   const maxTokens = options?.max_tokens ?? 4096;
 
-  let lastErr: unknown;
-  for (let attempt = 1; attempt <= MAX_LLM_RETRIES; attempt++) {
-    try {
+  return runWithRetries(
+    useCase,
+    async (model, apiKey) => {
       const res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
         method: "POST",
         headers: openRouterHeaders(apiKey),
@@ -275,27 +326,22 @@ export async function chatCompletionVision(
       const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
       const content = data.choices?.[0]?.message?.content;
       return typeof content === "string" ? content : "";
-    } catch (e) {
-      lastErr = e;
-      if (!isRetryableProviderError(e) || attempt === MAX_LLM_RETRIES) throw e;
-      await sleep(RETRY_BASE_MS * Math.pow(2, attempt - 1));
-    }
-  }
-  throw lastErr;
+    },
+    { modelOverride: options?.model }
+  );
 }
 
 /** One-shot text completion (no stream, no vision). For structuring text. */
 export async function chatCompletion(
   messages: { role: "system" | "user" | "assistant"; content: string }[],
-  options?: { max_tokens?: number; model?: string; temperature?: number }
+  options?: { max_tokens?: number; model?: string; temperature?: number; useCase?: LlmUseCase }
 ): Promise<string> {
-  const apiKey = getApiKey();
-  const model = options?.model ?? process.env.OPENROUTER_MODEL ?? DEFAULT_MODEL;
+  const useCase = options?.useCase ?? "extract";
   const maxTokens = options?.max_tokens ?? 4096;
 
-  let lastErr: unknown;
-  for (let attempt = 1; attempt <= MAX_LLM_RETRIES; attempt++) {
-    try {
+  return runWithRetries(
+    useCase,
+    async (model, apiKey) => {
       const res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
         method: "POST",
         headers: openRouterHeaders(apiKey),
@@ -314,13 +360,9 @@ export async function chatCompletion(
       const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
       const content = data.choices?.[0]?.message?.content;
       return typeof content === "string" ? content : "";
-    } catch (e) {
-      lastErr = e;
-      if (!isRetryableProviderError(e) || attempt === MAX_LLM_RETRIES) throw e;
-      await sleep(RETRY_BASE_MS * Math.pow(2, attempt - 1));
-    }
-  }
-  throw lastErr;
+    },
+    { modelOverride: options?.model }
+  );
 }
 
 export type OpenAIToolDef = {
@@ -362,16 +404,15 @@ function parseToolArguments(raw: string): Record<string, unknown> {
 export async function chatCompletionWithTools(
   messages: ToolCompletionMessage[],
   tools: OpenAIToolDef[],
-  options?: { max_tokens?: number; temperature?: number; model?: string }
+  options?: { max_tokens?: number; temperature?: number; model?: string; useCase?: LlmUseCase }
 ): Promise<{ content: string | null; toolCalls: ToolCallResult[] }> {
-  const apiKey = getApiKey();
-  const model = options?.model ?? process.env.OPENROUTER_MODEL ?? DEFAULT_MODEL;
+  const useCase = options?.useCase ?? "agent";
   const maxTokens = options?.max_tokens ?? 2048;
   const temperature = options?.temperature ?? 0.2;
 
-  let lastErr: unknown;
-  for (let attempt = 1; attempt <= MAX_LLM_RETRIES; attempt++) {
-    try {
+  return runWithRetries(
+    useCase,
+    async (model, apiKey) => {
       const res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
         method: "POST",
         headers: openRouterHeaders(apiKey),
@@ -409,13 +450,9 @@ export async function chatCompletionWithTools(
         arguments: parseToolArguments(tc.function.arguments),
       }));
       return { content, toolCalls };
-    } catch (e) {
-      lastErr = e;
-      if (!isRetryableProviderError(e) || attempt === MAX_LLM_RETRIES) throw e;
-      await sleep(RETRY_BASE_MS * Math.pow(2, attempt - 1));
-    }
-  }
-  throw lastErr;
+    },
+    { modelOverride: options?.model }
+  );
 }
 
 type EmbeddingResponse = {
@@ -425,15 +462,14 @@ type EmbeddingResponse = {
 /** Generate embeddings for one or more texts (RAG indexing and retrieval). */
 export async function createEmbeddings(
   input: string[],
-  options?: { model?: string }
+  options?: { model?: string; useCase?: LlmUseCase }
 ): Promise<number[][]> {
   if (input.length === 0) return [];
-  const apiKey = getApiKey();
-  const model = options?.model ?? process.env.OPENROUTER_EMBEDDING_MODEL ?? DEFAULT_EMBEDDING_MODEL;
+  const useCase = options?.useCase ?? "embeddings";
 
-  let lastErr: unknown;
-  for (let attempt = 1; attempt <= MAX_LLM_RETRIES; attempt++) {
-    try {
+  return runWithRetries(
+    useCase,
+    async (model, apiKey) => {
       const res = await fetch(`${OPENROUTER_BASE}/embeddings`, {
         method: "POST",
         headers: openRouterHeaders(apiKey),
@@ -446,13 +482,9 @@ export async function createEmbeddings(
       const data = (await res.json()) as EmbeddingResponse;
       const rows = (data.data ?? []).slice().sort((a, b) => a.index - b.index);
       return rows.map((row) => row.embedding ?? []);
-    } catch (e) {
-      lastErr = e;
-      if (!isRetryableProviderError(e) || attempt === MAX_LLM_RETRIES) throw e;
-      await sleep(RETRY_BASE_MS * Math.pow(2, attempt - 1));
-    }
-  }
-  throw lastErr;
+    },
+    { modelOverride: options?.model }
+  );
 }
 
 /** Batch embeddings for RAG (chunk indexing). */

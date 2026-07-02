@@ -2,9 +2,10 @@ import { NextResponse } from "next/server";
 import type { ProjectStructuredData } from "@/lib/build-context";
 import { runChatAgent } from "@/lib/agent-orchestrator";
 import type { ChatStreamEvent } from "@/lib/agent-events";
+import { formatProviderError } from "@/lib/openrouter";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 180;
 
 const MAX_HISTORY_MESSAGES = 8;
 const MAX_MESSAGE_CHARS = 2000;
@@ -69,7 +70,7 @@ export async function POST(request: Request) {
             emit(controller, encoder, event);
           }
         } catch (err) {
-          const errMsg = err instanceof Error ? err.message : String(err);
+          const errMsg = formatProviderError(err);
           emit(controller, encoder, { type: "error", error: errMsg });
         } finally {
           controller.close();

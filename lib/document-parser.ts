@@ -103,3 +103,14 @@ export async function extractTextFromFile(filePath: string): Promise<string> {
 export function getSupportedExtensions(): string[] {
   return [".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".txt", ".md", ".json"];
 }
+
+const VISION_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"] as const;
+
+/** Extensiones adicionales para subida de archivos de proyecto (visión OCR). */
+export function getProjectUploadExtensions(): string[] {
+  return [...getSupportedExtensions(), ...VISION_EXTENSIONS];
+}
+
+export function isVisionExtension(ext: string): boolean {
+  return VISION_EXTENSIONS.includes(ext.toLowerCase() as (typeof VISION_EXTENSIONS)[number]);
+}

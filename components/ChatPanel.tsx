@@ -9,7 +9,15 @@ import {
   createChatStreamState,
   parseNdjsonLine,
 } from "@/lib/chat-stream";
+import {
+  applyEvaluateStreamEvent,
+  createEvaluateStreamState,
+  formatEvaluateCompletionMessage,
+  parseEvaluateNdjsonLine,
+} from "@/lib/evaluate-stream";
 import { createStaggeredTraceReveal } from "@/lib/trace-reveal";
+import type { EvaluateStreamEvent } from "@/lib/evaluate-pipeline";
+import { stripCharacterLimitAnnotations } from "@/lib/report-format-limits";
 
 export type ChatMessage = {
   role: "user" | "assistant";
@@ -17,6 +25,10 @@ export type ChatMessage = {
   trace?: AgentTraceEntry[];
   traceRevealing?: boolean;
 };
+
+function formatReportContent(text: string): string {
+  return stripCharacterLimitAnnotations(stripThinkBlocks(text));
+}
 
 /** Elimina bloques <think>...</think> del texto para no mostrarlos en el chat. */
 function stripThinkBlocks(text: string): string {
@@ -64,6 +76,7 @@ export default function ChatPanel({
   projectElementsTable,
   projectStructuredData,
   sessionId,
+  onProjectElementsTableChange,
 }: {
   messages: ChatMessage[];
   onMessagesChange: (updater: (prev: ChatMessage[]) => ChatMessage[]) => void;
@@ -75,6 +88,7 @@ export default function ChatPanel({
   projectElementsTable: { element: string; content: string }[];
   projectStructuredData?: ProjectStructuredData;
   sessionId: string;
+  onProjectElementsTableChange?: (rows: { element: string; content: string }[]) => void;
 }) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -82,8 +96,12 @@ export default function ChatPanel({
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const traceRevealRef = useRef<ReturnType<typeof createStaggeredTraceReveal> | null>(null);
+  const evaluateRevealRef = useRef<ReturnType<typeof createStaggeredTraceReveal> | null>(null);
+  const evaluateTraceMsgIndexRef = useRef(-1);
+  const evaluateCompletionPendingRef = useRef<string | null>(null);
+  const evaluateFullTraceRef = useRef<AgentTraceEntry[]>([]);
 
-  const CHAT_TIMEOUT_MS = 120_000;
+  const CHAT_TIMEOUT_MS = 180_000;
 
   const handleSend = async () => {
     const text = input.trim();
@@ -124,7 +142,10 @@ export default function ChatPanel({
           message: text,
           projectFilePaths,
           projectElementsTable: projectElementsTable?.length ? projectElementsTable : undefined,
-          projectStructuredData: projectStructuredData ?? undefined,
+          projectStructuredData:
+            !projectElementsTable?.length && projectStructuredData
+              ? projectStructuredData
+              : undefined,
           messages: messages.slice(0, -1),
         }),
         signal: controller.signal,
@@ -157,6 +178,9 @@ export default function ChatPanel({
             if (!event) continue;
             if (event.type === "error") throw new Error(event.error);
             streamState = applyChatStreamEvent(streamState, event, true);
+            if (event.type === "project_elements_updated" && onProjectElementsTableChange) {
+              onProjectElementsTableChange(event.elements);
+            }
             syncAssistant(true);
           }
         }
@@ -214,9 +238,100 @@ export default function ChatPanel({
 
   const handleEvaluate = async () => {
     if (!activeTypeId || evaluating) return;
-    onMessagesChange((prev) => [...prev, { role: "assistant", content: "Generando informe de evaluación…" }]);
     setEvaluating(true);
     onReportContentChange("");
+
+    evaluateRevealRef.current?.destroy();
+    evaluateTraceMsgIndexRef.current = -1;
+    evaluateFullTraceRef.current = [];
+    evaluateCompletionPendingRef.current = null;
+
+    const reveal = createStaggeredTraceReveal((revealed) => {
+      onMessagesChange((prev) => {
+        const next = [...prev];
+        const traceIdx = evaluateTraceMsgIndexRef.current;
+        if (traceIdx < 0 || traceIdx >= next.length || next[traceIdx]?.role !== "assistant") {
+          return next;
+        }
+        next[traceIdx] = {
+          ...next[traceIdx],
+          content: "",
+          trace: revealed.trace,
+          traceRevealing: revealed.revealing,
+        };
+        return next;
+      });
+      if (!revealed.revealing && evaluateCompletionPendingRef.current) {
+        appendEvaluateCompletion();
+      }
+    });
+    reveal.onFullyRevealed(() => {
+      if (evaluateCompletionPendingRef.current) {
+        appendEvaluateCompletion();
+      }
+    });
+    evaluateRevealRef.current = reveal;
+
+    onMessagesChange((prev) => {
+      const next: ChatMessage[] = [
+        ...prev,
+        { role: "assistant", content: "", trace: [], traceRevealing: true },
+      ];
+      evaluateTraceMsgIndexRef.current = next.length - 1;
+      return next;
+    });
+
+    const appendEvaluateCompletion = () => {
+      const msg = evaluateCompletionPendingRef.current;
+      if (!msg) return;
+      evaluateCompletionPendingRef.current = null;
+      const fullTrace = evaluateFullTraceRef.current;
+
+      onMessagesChange((prev) => {
+        const next = [...prev];
+        const traceIdx = evaluateTraceMsgIndexRef.current;
+        if (traceIdx >= 0 && traceIdx < next.length && next[traceIdx]?.role === "assistant") {
+          next[traceIdx] = {
+            ...next[traceIdx],
+            trace: fullTrace.map((t) => ({ ...t, live: false })),
+            traceRevealing: false,
+            content: "",
+          };
+        }
+        const alreadyHas = next.some(
+          (m, i) =>
+            i !== traceIdx &&
+            m.role === "assistant" &&
+            m.content === msg &&
+            !(m.trace?.length || m.traceRevealing)
+        );
+        if (!alreadyHas) {
+          next.push({ role: "assistant", content: msg });
+        }
+        return next;
+      });
+
+      evaluateRevealRef.current?.destroy();
+      evaluateRevealRef.current = null;
+      evaluateTraceMsgIndexRef.current = -1;
+    };
+
+    const processEvaluateEvent = (
+      event: EvaluateStreamEvent,
+      streamState: ReturnType<typeof createEvaluateStreamState>,
+      live: boolean
+    ) => {
+      if (event.type === "error") throw new Error(event.error);
+      const nextState = applyEvaluateStreamEvent(streamState, event, live);
+      const trace = nextState.trace.map((t) => ({ ...t, live: live && t.live }));
+      evaluateFullTraceRef.current = trace;
+      if (event.type === "done") {
+        evaluateCompletionPendingRef.current = formatEvaluateCompletionMessage();
+      }
+      reveal.setState(trace, "");
+      return nextState;
+    };
+
     try {
       const res = await fetch("/api/evaluate", {
         method: "POST",
@@ -235,6 +350,8 @@ export default function ChatPanel({
       const decoder = new TextDecoder();
       let buffer = "";
       let reportContent = "";
+      let streamState = createEvaluateStreamState();
+
       if (reader) {
         while (true) {
           const { done, value } = await reader.read();
@@ -243,57 +360,54 @@ export default function ChatPanel({
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
           for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
-            try {
-              const data = JSON.parse(trimmed) as { type: string; message?: string; chunk?: string; error?: string };
-              if (data.type === "step" && typeof data.message === "string") {
-                onMessagesChange((prev) => {
-                  const next = [...prev];
-                  const last = next[next.length - 1];
-                  if (last?.role === "assistant") next[next.length - 1] = { ...last, content: data.message! };
-                  else next.push({ role: "assistant", content: data.message! });
-                  return next;
-                });
-              } else if (data.type === "content" && typeof data.chunk === "string") {
-                reportContent += data.chunk;
-                onReportContentChange(stripThinkBlocks(reportContent));
-              } else if (data.type === "done") {
-                onMessagesChange((prev) => [...prev, { role: "assistant", content: "Informe listo en el panel derecho." }]);
-              } else if (data.type === "error" && data.error) {
-                throw new Error(data.error);
-              }
-            } catch (e) {
-              if (e instanceof SyntaxError) continue;
-              throw e;
+            const event = parseEvaluateNdjsonLine(line);
+            if (!event) continue;
+            if (event.type === "content") {
+              reportContent += event.chunk;
+              onReportContentChange(formatReportContent(reportContent));
+              continue;
             }
+            streamState = processEvaluateEvent(event, streamState, true);
           }
         }
         if (buffer.trim()) {
-          try {
-            const data = JSON.parse(buffer.trim()) as { type: string; message?: string; chunk?: string; error?: string };
-            if (data.type === "step" && typeof data.message === "string") {
-              onMessagesChange((prev) => {
-                const next = [...prev];
-                const last = next[next.length - 1];
-                if (last?.role === "assistant") next[next.length - 1] = { ...last, content: data.message! };
-                return next;
-              });
-            } else if (data.type === "content" && typeof data.chunk === "string") {
-              reportContent += data.chunk;
-              onReportContentChange(stripThinkBlocks(reportContent));
-            } else if (data.type === "done") {
-              onMessagesChange((prev) => [...prev, { role: "assistant", content: "Informe listo en el panel derecho." }]);
-            } else if (data.type === "error" && data.error) {
-              throw new Error(data.error);
+          const event = parseEvaluateNdjsonLine(buffer);
+          if (event) {
+            if (event.type === "content") {
+              reportContent += event.chunk;
+              onReportContentChange(formatReportContent(reportContent));
+            } else {
+              streamState = processEvaluateEvent(event, streamState, false);
             }
-          } catch (e) {
-            if (!(e instanceof SyntaxError)) throw e;
           }
+        }
+        if (!evaluateCompletionPendingRef.current) {
+          evaluateCompletionPendingRef.current = formatEvaluateCompletionMessage();
+          streamState = applyEvaluateStreamEvent(streamState, { type: "done" }, false);
+          evaluateFullTraceRef.current = streamState.trace;
+          reveal.setState(streamState.trace, "");
         }
       }
     } catch (e) {
-      onMessagesChange((prev) => [...prev, { role: "assistant", content: `[Error: ${e instanceof Error ? e.message : String(e)}]` }]);
+      evaluateCompletionPendingRef.current = null;
+      evaluateRevealRef.current?.flushAll();
+      onMessagesChange((prev) => {
+        const next = [...prev];
+        const traceIdx = evaluateTraceMsgIndexRef.current;
+        if (traceIdx >= 0 && traceIdx < next.length && next[traceIdx]?.role === "assistant") {
+          next[traceIdx] = {
+            ...next[traceIdx],
+            content: `[Error: ${e instanceof Error ? e.message : String(e)}]`,
+            traceRevealing: false,
+          };
+        } else {
+          next.push({
+            role: "assistant",
+            content: `[Error: ${e instanceof Error ? e.message : String(e)}]`,
+          });
+        }
+        return next;
+      });
     } finally {
       setEvaluating(false);
     }
@@ -315,8 +429,8 @@ export default function ChatPanel({
         return;
       }
       const data = await res.json();
-      if (Array.isArray(data.paths) && data.paths.length) {
-        onProjectFilePathsChange([...projectFilePaths, ...data.paths]);
+      if (Array.isArray(data.paths)) {
+        onProjectFilePathsChange(data.paths);
       }
     } finally {
       setUploading(false);
@@ -359,11 +473,16 @@ export default function ChatPanel({
                 {m.role === "user" ? "Usuario" : "Evaluador"}
               </span>
               {m.role === "assistant" &&
-              (m.trace?.length || m.traceRevealing || (loading && i === messages.length - 1)) ? (
+              (m.trace?.length ||
+                m.traceRevealing ||
+                (loading && i === messages.length - 1) ||
+                (evaluating && i === messages.length - 1)) ? (
                 <div className="mt-1.5">
                   <AgentTrace
                     entries={m.trace ?? []}
-                    isActive={(loading || m.traceRevealing) && i === messages.length - 1}
+                    isActive={
+                      (loading || evaluating || m.traceRevealing) && i === messages.length - 1
+                    }
                     isRevealing={!!m.traceRevealing}
                   />
                 </div>
@@ -371,21 +490,27 @@ export default function ChatPanel({
               {(m.content ||
                 (m.role === "assistant" &&
                   !m.content &&
-                  (loading || m.traceRevealing) &&
+                  (loading || evaluating || m.traceRevealing) &&
                   i === messages.length - 1)) && (
                 <div className="mt-1 flex items-center gap-2 whitespace-pre-wrap break-words text-sm">
                   {m.role === "assistant" &&
                   !m.content &&
-                  (loading || m.traceRevealing) &&
+                  (loading || evaluating || m.traceRevealing) &&
                   i === messages.length - 1 ? (
                     <>
                       <LoadingSpinner />
                       <span className="text-gray-500 dark:text-gray-400">
                         {m.traceRevealing
-                          ? "Analizando…"
+                          ? evaluating
+                            ? "Evaluando…"
+                            : "Analizando…"
                           : m.trace?.length
-                            ? "Generando respuesta…"
-                            : "Respondiendo…"}
+                            ? evaluating
+                              ? "Generando informe…"
+                              : "Generando respuesta…"
+                            : evaluating
+                              ? "Evaluando…"
+                              : "Respondiendo…"}
                       </span>
                     </>
                   ) : (

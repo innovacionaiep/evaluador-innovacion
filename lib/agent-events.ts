@@ -23,6 +23,7 @@ export type ChatStreamEvent =
   | { type: "context_section"; section: string; detail?: string }
   | { type: "thinking"; chunk: string }
   | { type: "content"; chunk: string }
+  | { type: "project_elements_updated"; elements: { element: string; content: string }[] }
   | { type: "done" }
   | { type: "error"; error: string };
 

@@ -6,19 +6,13 @@ import * as pg from "./db-postgres";
 const dataDir = path.join(process.cwd(), "data");
 const dbPath = path.join(dataDir, "evaluador.db");
 
+let sqliteSingleton: DatabaseSync | null = null;
+
 function usePostgres(): boolean {
   return typeof process !== "undefined" && !!(process.env.DATABASE_URL || process.env.POSTGRES_URL);
 }
 
-function getDb(): DatabaseSync {
-  if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-  }
-  return new DatabaseSync(dbPath);
-}
-
-function initDbSync() {
-  const db = getDb();
+function runSqliteMigrations(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS evaluation_types (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,7 +32,6 @@ function initDbSync() {
       FOREIGN KEY (evaluation_type_id) REFERENCES evaluation_types(id) ON DELETE CASCADE
     );
   `);
-  // Migration: add new columns to existing tables (ignore if already present)
   const alterColumns = [
     "ALTER TABLE evaluation_type_config ADD COLUMN elements TEXT DEFAULT '[]'",
     "ALTER TABLE evaluation_type_config ADD COLUMN instructions TEXT DEFAULT ''",
@@ -52,6 +45,21 @@ function initDbSync() {
       // Column already exists
     }
   }
+}
+
+function getDb(): DatabaseSync {
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+  }
+  if (!sqliteSingleton) {
+    sqliteSingleton = new DatabaseSync(dbPath);
+    runSqliteMigrations(sqliteSingleton);
+  }
+  return sqliteSingleton;
+}
+
+function initDbSync() {
+  getDb();
 }
 
 export type ConfigRow = {

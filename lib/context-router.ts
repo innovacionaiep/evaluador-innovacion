@@ -43,6 +43,7 @@ Reglas:
 - Si preguntan por el manual, knowledge, Oslo, innovación teórica, definiciones → sources SOLO knowledge_rag (o knowledge_rag + project si comparan). excludeSources debe incluir rubric, instructions, report_format, config_summary salvo que también pregunten por ellos.
 - Si preguntan por el proyecto (objetivos, presupuesto, sedes…) → project (+ project_structured si hay Excel). excludeSources: rubric, knowledge_rag salvo que también lo pidan.
 - Si preguntan por instrucciones, formato, elementos, rúbrica configurada → config sources. excludeSources: knowledge_rag, project.
+- Si preguntan por la rúbrica Y el manual/Oslo (evaluar la rúbrica según el manual) → sources knowledge_rag + rubric; NO excluir rubric; agentLevel C, useToolLoop true.
 - Si comparan manual Y proyecto O necesitan varias fuentes → complexity "moderate" o "complex", agentLevel "B" o "C", useToolLoop true.
 - Pregunta simple de una sola fuente → agentLevel "A", complexity "simple", useToolLoop false.
 - Comparación, varios pasos, "según el manual y el proyecto" → agentLevel "C", complexity "complex", useToolLoop true.
@@ -130,9 +131,29 @@ function applyHardRules(plan: ContextPlan, message: string, input: RouterInput):
     }
   }
 
-  if (asksRubric && !asksKnowledge) {
-    p.sources = [...new Set([...p.sources, "rubric", "config_summary"])] as ContextPlan["sources"];
+  if (asksRubric) {
+    p.sources = [...new Set([...p.sources, "rubric"])] as ContextPlan["sources"];
     p.excludeSources = p.excludeSources.filter((s) => s !== "rubric");
+  }
+
+  if (asksRubric && asksKnowledge) {
+    p.sources = [...new Set([...p.sources, "knowledge_rag", "rubric"])] as ContextPlan["sources"];
+    p.excludeSources = p.excludeSources.filter(
+      (s) => s !== "rubric" && s !== "knowledge_rag"
+    );
+    p.agentLevel = "C";
+    p.complexity = "complex";
+    p.useToolLoop = true;
+    p.intent = "mixed";
+    p.intentLabel = "Evaluación de rúbrica según manual";
+    p.toolsHint = [...new Set([...p.toolsHint, "search_knowledge", "get_rubric"])];
+    p.responseRules = [
+      "Responde en español evaluando si la rúbrica está bien formulada según el manual de referencia.",
+      "DEBES usar el texto de la rúbrica configurada y los fragmentos del Knowledge en tu respuesta.",
+      "Indica fortalezas, debilidades y recomendaciones concretas de mejora.",
+    ];
+  } else if (asksRubric && !asksKnowledge) {
+    p.sources = [...new Set([...p.sources, "config_summary"])] as ContextPlan["sources"];
   }
 
   if (asksConfig && !asksKnowledge && !asksProject) {
@@ -248,7 +269,7 @@ Disponibilidad:
 - Knowledge indexado: ${input.hasKnowledge ? "sí" : "no"}`,
         },
       ],
-      { max_tokens: 900, temperature: 0.1 }
+      { max_tokens: 900, temperature: 0.1, useCase: "router" }
     );
 
     const parsed = parseRouterJson(raw);

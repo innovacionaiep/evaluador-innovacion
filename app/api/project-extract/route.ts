@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { runExtractPipeline } from "@/lib/project-extract-pipeline";
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
-/** Extrae proyecto con pipeline mejorado: RAG por sesión, heurísticas Excel, extracción por elemento. */
+/** Extrae proyecto con pipeline LLM-first: RAG por sesión + búsqueda integral por elemento. */
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -15,6 +15,7 @@ export async function POST(request: Request) {
     const streamRequested = body?.stream === true;
     const sessionId = typeof body?.sessionId === "string" ? body.sessionId : "default";
     const useAgent = body?.useAgent === true;
+    const skipReindex = body?.skipReindex !== false;
 
     if (projectFilePaths.length === 0) {
       return NextResponse.json({ text: "" });
@@ -30,6 +31,7 @@ export async function POST(request: Request) {
               projectFilePaths,
               evaluationTypeId,
               useAgent,
+              skipReindex,
             })) {
               controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
             }
@@ -59,6 +61,7 @@ export async function POST(request: Request) {
       projectFilePaths,
       evaluationTypeId,
       useAgent,
+      skipReindex,
     })) {
       if (event.type === "done") {
         text = event.text;

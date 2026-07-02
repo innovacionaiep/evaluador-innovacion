@@ -84,6 +84,8 @@ export type BuildSystemContextOptions = {
   chapterNumbers?: number[];
   /** En evaluación multi-dimensión: enfoque en una sola dimensión. */
   evaluateDimension?: { name: string; content: string };
+  /** En evaluación por subdimensión: enfoque en un solo subcriterio. */
+  evaluateSubdimension?: { dimensionName: string; name: string; content: string };
   /** Callback con chunks recuperados (p. ej. deduplicación en evaluación). */
   onRetrievedChunks?: (chunks: RetrievedChunk[]) => void;
   /** Emite pasos observables durante la construcción del contexto (chat). */
@@ -401,7 +403,11 @@ export async function buildSystemContext(
     });
   }
 
-  if (options?.evaluateDimension) {
+  if (options?.evaluateSubdimension) {
+    parts.push(
+      `## Enfoque de esta evaluación parcial\n\nEvalúa ÚNICAMENTE la subdimensión **${options.evaluateSubdimension.name}** (dimensión **${options.evaluateSubdimension.dimensionName}**). Fundamenta el análisis en los fragmentos del Manual de referencia (Knowledge) incluidos abajo y en los datos del proyecto.\n\n### Criterios de esta subdimensión\n\n${options.evaluateSubdimension.content}`
+    );
+  } else if (options?.evaluateDimension) {
     parts.push(
       `## Enfoque de esta evaluación parcial\n\nEvalúa ÚNICAMENTE la dimensión **${options.evaluateDimension.name}**. Fundamenta el análisis en los fragmentos del Manual de referencia (Knowledge) incluidos abajo y en los datos del proyecto.\n\n### Criterios de esta dimensión\n\n${options.evaluateDimension.content}`
     );
@@ -616,7 +622,8 @@ REGLA para preguntas sobre rúbrica o criterios: Responde únicamente que no hay
 
   const rubricFromArtifacts = options?.agentArtifacts?.rubricText?.trim();
   const rubricBody = rubricFromArtifacts || rubricSectionText;
-  const includeRubric = !plan || includesSource(plan, "rubric");
+  const includeRubric =
+    !!rubricFromArtifacts || !plan || includesSource(plan, "rubric");
 
   if (includeRubric) {
     parts.push("## Rúbrica y criterios de evaluación\n\n" + rubricBody);

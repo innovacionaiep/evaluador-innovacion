@@ -1,12 +1,18 @@
 import type { ExcelStructuredData, ExcelSheet, ExcelCell, ExcelMerge } from "@/lib/excel-structured-extract";
-import { fuzzyMatchScore, normalizeForMatch } from "@/lib/hybrid-search";
+import { fuzzyMatchScore, normalizeForMatch } from "@/lib/text-match";
+import {
+  isAcceptableExtractedContent,
+  isFocalizacionKeywordList,
+  looksLikeFormQuestionContent,
+} from "@/lib/extract-content-quality";
+import { sheetsForElement, isGanttActivitiesElement, isIndicatorsTableElement, isGanttSheetName } from "@/lib/sheet-element-routing";
+import { extractGanttActivitiesFromExcel } from "@/lib/gantt-extract";
 import {
   isGanttColumnHeaderLabel,
   isLikelyGanttHeaderRowContent,
   isProjectNameElement,
   isTableHeaderRow,
   sheetPriorityScore,
-  sortSheetsByPriority,
 } from "@/lib/excel-sheet-priority";
 import { detectProjectNameFromExcel } from "@/lib/project-name-detect";
 import { joinUniqueParts, finalizeContentForElement } from "@/lib/extract-content-clean";
@@ -28,7 +34,7 @@ export type ElementDef = { title: string; description: string; section?: string 
 export type HeuristicMatch = {
   content: string;
   confidence: number;
-  method: "label_value_row" | "label_value_col" | "merge_block" | "project_title_cell" | "none";
+  method: "label_value_row" | "label_value_col" | "merge_block" | "project_title_cell" | "gantt_sheet" | "indicators_sheet" | "none";
 };
 
 const HIGH_CONFIDENCE = 0.72;
@@ -100,6 +106,10 @@ function scoreLabelAgainstElement(label: string, element: ElementDef): number {
   const titleScore = fuzzyMatchScore(label, element.title);
   const descScore = element.description ? fuzzyMatchScore(label, element.description) * 0.6 : 0;
 
+  if (/ejes?\s+de\s+impacto|focalizaci/.test(normEl)) {
+    if (normLabel === "focalizacion" || normLabel === "focalización") return 0.15;
+  }
+
   if (isProjectNameElement(element)) {
     if (!normLabel.includes("proyecto") && titleScore < 0.9) {
       return Math.min(titleScore, 0.35);
@@ -114,8 +124,17 @@ function applyContentQuality(match: HeuristicMatch, element?: ElementDef): Heuri
   if (isLikelyGanttHeaderRowContent(match.content)) {
     return { ...match, content: "", confidence: 0, method: "none" };
   }
+  if (element && looksLikeFormQuestionContent(match.content)) {
+    return { ...match, content: "", confidence: 0, method: "none" };
+  }
+  if (element && isFocalizacionKeywordList(match.content) && /ejes?\s+de\s+impacto|focalizaci/i.test(element.title)) {
+    return { ...match, content: "", confidence: 0, method: "none" };
+  }
   if (element) {
     const cleaned = finalizeContentForElement(match.content, element);
+    if (!isAcceptableExtractedContent(element, cleaned)) {
+      return { ...match, content: "", confidence: 0, method: "none" };
+    }
     return { ...match, content: cleaned };
   }
   return match;
@@ -243,8 +262,17 @@ function extractFromSheet(sheet: ExcelSheet, element: ElementDef): HeuristicMatc
 
       const right = getCell(map, cell.row, cell.col + 1);
       const below = getCell(map, cell.row + 1, cell.col);
-      const content = right || below;
+      let content = right || below;
+      if (!content || content.length < 10) {
+        const rowParts: string[] = [];
+        for (let c = cell.col + 1; c <= cell.col + 6; c++) {
+          const v = getCell(map, cell.row, c);
+          if (v) rowParts.push(v);
+        }
+        content = joinUniqueParts(rowParts);
+      }
       if (!content || normalizeForMatch(content) === titleNorm) continue;
+      if (looksLikeFormQuestionContent(content)) continue;
       if (isLikelyGanttHeaderRowContent(content)) continue;
 
       const confidence = 0.78;
@@ -306,7 +334,7 @@ export function extractElementHeuristic(
 
   if (isFormRowElement(element)) {
     const extracted = extractFormRowFromExcel(structuredFiles, element);
-    if (extracted) {
+    if (extracted && isAcceptableExtractedContent(element, extracted.content)) {
       return applyContentQuality(
         {
           content: extracted.content,
@@ -318,12 +346,28 @@ export function extractElementHeuristic(
     }
   }
 
+  const gantt = extractGanttActivitiesFromExcel(structuredFiles, element);
+  if (gantt && isAcceptableExtractedContent(element, gantt.content)) {
+    return applyContentQuality(
+      { content: gantt.content, confidence: gantt.confidence, method: "gantt_sheet" },
+      element
+    );
+  }
+
+  // Indicadores: no devolver salida determinista; el híbrido usa LLM.
+
   let best: HeuristicMatch = { content: "", confidence: 0, method: "none" };
 
-  for (const file of structuredFiles) {
-    const sheets = sortSheetsByPriority(file.sheets);
+  const INDICATORS_SHEET_RE = /indicador/i;
 
-    for (const sheet of sheets) {
+  for (const file of structuredFiles) {
+    const orderedSheets = sheetsForElement(element, file.sheets);
+
+    for (const sheet of orderedSheets) {
+      const sheetNorm = normalizeForMatch(sheet.sheetName);
+      if (isGanttActivitiesElement(element) && !isGanttSheetName(sheet.sheetName)) continue;
+      if (isIndicatorsTableElement(element) && !INDICATORS_SHEET_RE.test(sheetNorm)) continue;
+
       const match = boostMatch(extractFromSheet(sheet, element), sheet.sheetName);
       if (match.confidence > best.confidence) {
         best = match;

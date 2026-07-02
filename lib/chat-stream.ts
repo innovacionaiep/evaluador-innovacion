@@ -10,6 +10,7 @@ export type ChatStreamState = {
   content: string;
   trace: AgentTraceEntry[];
   thinkingEntryId: string | null;
+  projectElements?: { element: string; content: string }[];
 };
 
 export function createChatStreamState(): ChatStreamState {
@@ -24,6 +25,7 @@ export function applyChatStreamEvent(
   const trace = [...state.trace];
   let content = state.content;
   let thinkingEntryId = state.thinkingEntryId;
+  let projectElements = state.projectElements;
 
   switch (event.type) {
     case "step": {
@@ -145,6 +147,16 @@ export function applyChatStreamEvent(
       }
       break;
     }
+    case "project_elements_updated": {
+      projectElements = event.elements;
+      trace.push({
+        id: nextTraceId(),
+        kind: "step",
+        title: "Elementos del proyecto actualizados",
+        detail: `${event.elements.length} elemento(s) tras re-extracción`,
+      });
+      break;
+    }
     case "done": {
       for (let i = 0; i < trace.length; i++) {
         if (trace[i].live) trace[i] = { ...trace[i], live: false };
@@ -155,7 +167,7 @@ export function applyChatStreamEvent(
       break;
   }
 
-  return { content, trace, thinkingEntryId };
+  return { content, trace, thinkingEntryId, projectElements };
 }
 
 export function parseNdjsonLine(line: string): ChatStreamEvent | null {

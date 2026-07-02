@@ -11,15 +11,17 @@ export type ProjectExtractedRow = {
   incomplete?: boolean;
 };
 
+type ConfigElementMeta = { title: string; section: string; description?: string };
+
 type Props = {
   rows: ProjectExtractedRow[];
-  elementsWithSection: { title: string; section: string }[];
+  elementsWithSection: ConfigElementMeta[];
   extractedProjectText: string;
 };
 
 function orderRows(
   rawRows: ProjectExtractedRow[],
-  elementsWithSection: { title: string; section: string }[]
+  elementsWithSection: ConfigElementMeta[]
 ): ProjectExtractedRow[] {
   const sectionOrder: string[] = [];
   for (const e of elementsWithSection) {
@@ -58,7 +60,7 @@ export default function ProjectExtractedTable({
 
   const elementDefs: ElementDef[] = elementsWithSection.map((e) => ({
     title: e.title,
-    description: "",
+    description: e.description ?? "",
     section: e.section,
   }));
 

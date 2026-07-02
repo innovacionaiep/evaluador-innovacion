@@ -1,36 +1,75 @@
 import path from "path";
-import fs from "fs";
 import { getProjectVectorsDir } from "@/lib/storage";
+import {
+  loadChunksFromStore,
+  loadMetaFromStore,
+  saveChunksToStore,
+  type ChunkStoreConfig,
+} from "@/lib/chunk-store";
+import {
+  clearProjectStructuredIndex,
+  hasProjectStructuredIndex,
+  structuredIndexMatches,
+} from "@/lib/project-structured-index";
 import type { StoredChunk } from "@/lib/vector-store";
 
 const CHUNKS_FILE = "project-chunks.json";
 const META_FILE = "project-meta.json";
 
+export type ProjectIndexMeta = {
+  indexedAt: string;
+  filePaths?: string[];
+};
+
+function storeConfig(sessionId: string): ChunkStoreConfig {
+  return {
+    kind: "project",
+    id: sessionId,
+    dir: getProjectVectorsDir(sessionId),
+    chunksFile: CHUNKS_FILE,
+    metaFile: META_FILE,
+  };
+}
+
 export function saveProjectChunks(
   sessionId: string,
   chunks: StoredChunk[],
-  meta?: { indexedAt: string; filePaths?: string[] }
+  meta?: ProjectIndexMeta
 ): void {
-  const dir = getProjectVectorsDir(sessionId);
-  fs.writeFileSync(path.join(dir, CHUNKS_FILE), JSON.stringify(chunks), "utf-8");
-  if (meta) {
-    fs.writeFileSync(path.join(dir, META_FILE), JSON.stringify(meta), "utf-8");
-  }
+  saveChunksToStore(storeConfig(sessionId), chunks, meta);
 }
 
 export function loadProjectChunks(sessionId: string): StoredChunk[] {
-  const dir = getProjectVectorsDir(sessionId);
-  const chunksPath = path.join(dir, CHUNKS_FILE);
-  if (!fs.existsSync(chunksPath)) return [];
-  try {
-    const raw = fs.readFileSync(chunksPath, "utf-8");
-    const data = JSON.parse(raw);
-    return Array.isArray(data) ? data : [];
-  } catch {
-    return [];
-  }
+  return loadChunksFromStore(storeConfig(sessionId));
+}
+
+export function loadProjectIndexMeta(sessionId: string): ProjectIndexMeta | null {
+  return loadMetaFromStore<ProjectIndexMeta>(storeConfig(sessionId));
+}
+
+/** True si RAG y índice estructurado corresponden a los mismos archivos. */
+export function projectIndexMatches(sessionId: string, filePaths: string[]): boolean {
+  if (!hasProjectChunks(sessionId)) return false;
+  if (!hasProjectStructuredIndex(sessionId)) return false;
+  const meta = loadProjectIndexMeta(sessionId);
+  if (!meta?.filePaths?.length) return false;
+  const norm = (paths: string[]) =>
+    [...paths].map((p) => path.normalize(p).toLowerCase()).sort();
+  const a = norm(filePaths);
+  const b = norm(meta.filePaths);
+  const ragMatch = a.length === b.length && a.every((p, i) => p === b[i]);
+  return ragMatch && structuredIndexMatches(sessionId, filePaths);
 }
 
 export function hasProjectChunks(sessionId: string): boolean {
   return loadProjectChunks(sessionId).length > 0;
+}
+
+/** Borra el índice RAG y estructurado del proyecto (p. ej. al reemplazar archivos de sesión). */
+export function clearProjectIndex(sessionId: string): void {
+  saveProjectChunks(sessionId, [], {
+    indexedAt: new Date().toISOString(),
+    filePaths: [],
+  });
+  clearProjectStructuredIndex(sessionId);
 }

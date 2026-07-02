@@ -1,6 +1,11 @@
 import path from "path";
-import fs from "fs";
 import { getVectorsDir } from "@/lib/storage";
+import {
+  loadChunksFromStore,
+  loadMetaFromStore,
+  saveChunksToStore,
+  type ChunkStoreConfig,
+} from "@/lib/chunk-store";
 
 export type StoredChunk = {
   id: string;
@@ -16,34 +21,37 @@ export type StoredChunk = {
 const CHUNKS_FILE = "chunks.json";
 const META_FILE = "meta.json";
 
+export type KnowledgeIndexMeta = {
+  indexedAt: string;
+  knowledgeVersion?: string;
+};
+
+function storeConfig(evaluationTypeId: number): ChunkStoreConfig {
+  return {
+    kind: "knowledge",
+    id: evaluationTypeId,
+    dir: getVectorsDir(evaluationTypeId),
+    chunksFile: CHUNKS_FILE,
+    metaFile: META_FILE,
+  };
+}
+
 export function saveChunks(
   evaluationTypeId: number,
   chunks: StoredChunk[],
-  meta?: { indexedAt: string; knowledgeVersion?: string }
+  meta?: KnowledgeIndexMeta
 ): void {
-  const dir = getVectorsDir(evaluationTypeId);
-  const chunksPath = path.join(dir, CHUNKS_FILE);
-  fs.writeFileSync(chunksPath, JSON.stringify(chunks), "utf-8");
-  if (meta) {
-    fs.writeFileSync(path.join(dir, META_FILE), JSON.stringify(meta), "utf-8");
-  }
+  saveChunksToStore(storeConfig(evaluationTypeId), chunks, meta);
 }
 
 export function loadChunks(evaluationTypeId: number): StoredChunk[] {
-  const dir = getVectorsDir(evaluationTypeId);
-  const chunksPath = path.join(dir, CHUNKS_FILE);
-  if (!fs.existsSync(chunksPath)) return [];
-  try {
-    const raw = fs.readFileSync(chunksPath, "utf-8");
-    const data = JSON.parse(raw);
-    return Array.isArray(data) ? data : [];
-  } catch {
-    return [];
-  }
+  return loadChunksFromStore(storeConfig(evaluationTypeId));
+}
+
+export function loadChunksMeta(evaluationTypeId: number): KnowledgeIndexMeta | null {
+  return loadMetaFromStore<KnowledgeIndexMeta>(storeConfig(evaluationTypeId));
 }
 
 export function hasChunks(evaluationTypeId: number): boolean {
-  const chunks = loadChunks(evaluationTypeId);
-  return chunks.length > 0;
+  return loadChunks(evaluationTypeId).length > 0;
 }
-

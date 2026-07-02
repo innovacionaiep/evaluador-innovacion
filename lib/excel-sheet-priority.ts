@@ -1,5 +1,5 @@
 import type { ExcelSheet } from "@/lib/excel-structured-extract";
-import { normalizeForMatch } from "@/lib/hybrid-search";
+import { normalizeForMatch } from "@/lib/text-match";
 
 const GANTT_SHEET = /gantt|cronograma|carta\s*gantt/i;
 const MEETING_SHEET = /reuni[oó]n|reunion/i;

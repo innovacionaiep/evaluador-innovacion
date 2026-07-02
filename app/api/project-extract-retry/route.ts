@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { retryExtractElement } from "@/lib/project-extract-pipeline";
 
-export const maxDuration = 90;
+export const maxDuration = 120;
 
 /** Reintento interactivo de extracción para un elemento concreto (casos difíciles / chat). */
 export async function POST(request: Request) {
