@@ -3,24 +3,20 @@ import fs from "fs";
 import path from "path";
 import { getLlmModels, initDb, saveLlmModels } from "@/lib/db";
 import {
-  LLM_USE_CASE_DEFAULTS,
+  emptyLlmModels,
+  isLlmModelsComplete,
+  LLM_USE_CASE_LABELS,
+  LLM_USE_CASES,
   type LlmConfigPublic,
   type LlmUseCase,
 } from "@/lib/llm-config-types";
 
 const LEGACY_CONFIG_PATH = path.join(process.cwd(), "data", "llm-config.json");
 
-let modelsCache: Record<LlmUseCase, string> | null = null;
-let modelsLoadPromise: Promise<void> | null = null;
-
-function defaultModels(): Record<LlmUseCase, string> {
-  return { ...LLM_USE_CASE_DEFAULTS };
-}
-
 function normalizeModels(raw: Record<string, unknown> | null | undefined): Record<LlmUseCase, string> {
-  const models = defaultModels();
+  const models = emptyLlmModels();
   if (!raw) return models;
-  for (const useCase of Object.keys(LLM_USE_CASE_DEFAULTS) as LlmUseCase[]) {
+  for (const useCase of LLM_USE_CASES) {
     const val = raw[useCase];
     if (typeof val === "string" && val.trim()) {
       models[useCase] = val.trim();
@@ -35,10 +31,7 @@ function readLegacyModelsFromFile(): Record<LlmUseCase, string> | null {
     const raw = JSON.parse(fs.readFileSync(LEGACY_CONFIG_PATH, "utf-8")) as Record<string, unknown>;
     if (!raw?.models || typeof raw.models !== "object") return null;
     const models = normalizeModels(raw.models as Record<string, unknown>);
-    const hasCustom = (Object.keys(LLM_USE_CASE_DEFAULTS) as LlmUseCase[]).some(
-      (useCase) => models[useCase] !== LLM_USE_CASE_DEFAULTS[useCase]
-    );
-    return hasCustom ? models : null;
+    return LLM_USE_CASES.some((useCase) => !!models[useCase].trim()) ? models : null;
   } catch {
     return null;
   }
@@ -51,38 +44,26 @@ async function loadModelsFromStore(): Promise<Record<LlmUseCase, string>> {
 
   const legacy = readLegacyModelsFromFile();
   if (legacy) {
-    await saveLlmModels(legacy);
+    if (isLlmModelsComplete(legacy)) {
+      await saveLlmModels(legacy);
+    }
     return legacy;
   }
 
-  return defaultModels();
-}
-
-async function ensureModelsCache(): Promise<void> {
-  if (modelsCache) return;
-  if (!modelsLoadPromise) {
-    modelsLoadPromise = (async () => {
-      modelsCache = await loadModelsFromStore();
-    })();
-  }
-  await modelsLoadPromise;
-}
-
-export function invalidateLlmModelsCache(): void {
-  modelsCache = null;
-  modelsLoadPromise = null;
+  return emptyLlmModels();
 }
 
 export async function loadLlmModels(): Promise<Record<LlmUseCase, string>> {
-  await ensureModelsCache();
-  return { ...(modelsCache ?? defaultModels()) };
+  return loadModelsFromStore();
 }
 
 export async function saveLlmModelsConfig(models: Record<LlmUseCase, string>): Promise<void> {
   const normalized = normalizeModels(models);
+  if (!isLlmModelsComplete(normalized)) {
+    throw new Error("Debe configurar un modelo para cada función en Configurar LLM.");
+  }
   await initDb();
   await saveLlmModels(normalized);
-  modelsCache = normalized;
 }
 
 export function getApiKey(): string {
@@ -98,29 +79,22 @@ export function hasOpenRouterApiKey(): boolean {
   return !!process.env.OPENROUTER_API_KEY?.trim();
 }
 
+/** Siempre lee desde la base de datos (sin caché en memoria) para evitar modelos obsoletos en serverless. */
 export async function resolveModelForUseCase(
   useCase: LlmUseCase,
   override?: string
 ): Promise<string> {
   if (override?.trim()) return override.trim();
 
-  await ensureModelsCache();
-  const fromConfig = modelsCache?.[useCase]?.trim();
-  if (fromConfig) return fromConfig;
-
-  const envMap: Partial<Record<LlmUseCase, string | undefined>> = {
-    chat: process.env.OPENROUTER_MODEL,
-    router: process.env.OPENROUTER_MODEL,
-    agent: process.env.OPENROUTER_MODEL,
-    evaluate: process.env.OPENROUTER_MODEL,
-    extract: process.env.OPENROUTER_MODEL,
-    vision: process.env.OPENROUTER_EXTRACT_MODEL,
-    embeddings: process.env.OPENROUTER_EMBEDDING_MODEL,
-  };
-  const fromEnv = envMap[useCase]?.trim();
-  if (fromEnv) return fromEnv;
-
-  return LLM_USE_CASE_DEFAULTS[useCase];
+  const models = await loadModelsFromStore();
+  const model = models[useCase]?.trim();
+  if (!model) {
+    throw new Error(
+      `No hay modelo configurado para «${LLM_USE_CASE_LABELS[useCase]}». ` +
+        "Defínalo en Configurar LLM antes de usar esta función."
+    );
+  }
+  return model;
 }
 
 export async function getLlmConfigPublic(): Promise<LlmConfigPublic> {
@@ -128,5 +102,18 @@ export async function getLlmConfigPublic(): Promise<LlmConfigPublic> {
   return {
     models,
     hasOpenRouterApiKey: hasOpenRouterApiKey(),
+    modelsComplete: isLlmModelsComplete(models),
   };
+}
+
+export async function assertLlmModelsConfigured(): Promise<void> {
+  const models = await loadLlmModels();
+  if (isLlmModelsComplete(models)) return;
+  const missing = LLM_USE_CASES.filter((useCase) => !models[useCase]?.trim()).map(
+    (useCase) => LLM_USE_CASE_LABELS[useCase]
+  );
+  throw new Error(
+    `Faltan modelos en Configurar LLM: ${missing.join(", ")}. ` +
+      "Todos los campos son obligatorios; no hay modelos por defecto."
+  );
 }

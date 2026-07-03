@@ -3,6 +3,7 @@ import type { ProjectStructuredData } from "@/lib/build-context";
 import { runChatAgent } from "@/lib/agent-orchestrator";
 import type { ChatStreamEvent } from "@/lib/agent-events";
 import { formatProviderError } from "@/lib/openrouter";
+import { assertLlmModelsConfigured } from "@/lib/llm-config-server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 180;
@@ -20,6 +21,7 @@ function emit(
 
 export async function POST(request: Request) {
   try {
+    await assertLlmModelsConfigured();
     const body = await request.json();
     const evaluationTypeId = Number(body?.evaluationTypeId);
     const message = typeof body?.message === "string" ? body.message.trim() : "";

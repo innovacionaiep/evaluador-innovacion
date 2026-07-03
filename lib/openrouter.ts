@@ -12,8 +12,6 @@ import {
 import type { LlmUseCase } from "@/lib/llm-config-types";
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
-const DEFAULT_MODEL = "openai/gpt-4o";
-const DEFAULT_EMBEDDING_MODEL = "openai/text-embedding-3-small";
 const EMBEDDING_BATCH_SIZE = 16;
 
 export type OpenRouterCallOptions = {
@@ -505,4 +503,3 @@ export async function embedQuery(query: string): Promise<number[]> {
   return vectors[0] ?? [];
 }
 
-export { DEFAULT_MODEL as OPENROUTER_DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL as OPENROUTER_DEFAULT_EMBEDDING_MODEL };

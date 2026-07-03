@@ -93,7 +93,7 @@ async function* runToolLoop(
       const { content, toolCalls } = await chatCompletionWithTools(
         messages,
         AGENT_TOOL_DEFINITIONS,
-        { max_tokens: 1024, temperature: 0.2 }
+        { max_tokens: 1024, temperature: 0.2, useCase: "agent" }
       );
 
       if (toolCalls.length > 0) {
@@ -295,7 +295,7 @@ export async function* runChatAgent(input: ChatAgentInput): AsyncGenerator<ChatS
   let hasThinking = false;
   let hasContent = false;
 
-  for await (const part of streamChatDetailed(messages)) {
+  for await (const part of streamChatDetailed(messages, { useCase: "chat" })) {
     if (part.kind === "thinking") {
       if (!hasThinking) {
         yield {

@@ -4,7 +4,7 @@ import {
   loadLlmModels,
   saveLlmModelsConfig,
 } from "@/lib/llm-config-server";
-import { LLM_USE_CASE_DEFAULTS, type LlmUseCase } from "@/lib/llm-config-types";
+import { isLlmModelsComplete, LLM_USE_CASES, type LlmUseCase } from "@/lib/llm-config-types";
 
 export async function GET() {
   try {
@@ -21,12 +21,19 @@ export async function PUT(request: Request) {
 
     const models = { ...current };
     if (body?.models && typeof body.models === "object") {
-      for (const useCase of Object.keys(LLM_USE_CASE_DEFAULTS) as LlmUseCase[]) {
+      for (const useCase of LLM_USE_CASES) {
         const val = (body.models as Record<string, unknown>)[useCase];
         if (typeof val === "string") {
-          models[useCase] = val.trim() || LLM_USE_CASE_DEFAULTS[useCase];
+          models[useCase] = val.trim();
         }
       }
+    }
+
+    if (!isLlmModelsComplete(models)) {
+      return NextResponse.json(
+        { error: "Debe configurar un modelo para cada función." },
+        { status: 400 }
+      );
     }
 
     await saveLlmModelsConfig(models);

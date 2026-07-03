@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 import { getConfig } from "@/lib/db";
 import { runEvaluatePipeline } from "@/lib/evaluate-pipeline";
+import { assertLlmModelsConfigured } from "@/lib/llm-config-server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 export async function POST(request: Request) {
   try {
+    await assertLlmModelsConfigured();
     const body = await request.json();
     const evaluationTypeId = Number(body?.evaluationTypeId);
     const projectElementsTable = Array.isArray(body?.projectElementsTable)

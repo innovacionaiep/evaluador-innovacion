@@ -2,24 +2,17 @@
 
 import { useState, useEffect } from "react";
 import {
-  LLM_USE_CASE_DEFAULTS,
+  emptyLlmModels,
+  isLlmModelsComplete,
   LLM_USE_CASE_LABELS,
+  LLM_USE_CASES,
   type LlmUseCase,
 } from "@/lib/llm-config-types";
-
-const USE_CASE_ORDER: LlmUseCase[] = [
-  "chat",
-  "router",
-  "agent",
-  "evaluate",
-  "extract",
-  "vision",
-  "embeddings",
-];
 
 type LlmConfigResponse = {
   models: Record<LlmUseCase, string>;
   hasOpenRouterApiKey: boolean;
+  modelsComplete: boolean;
 };
 
 export default function LlmConfigModal({
@@ -29,9 +22,7 @@ export default function LlmConfigModal({
   isOpen: boolean;
   onClose: () => void;
 }) {
-  const [models, setModels] = useState<Record<LlmUseCase, string>>({
-    ...LLM_USE_CASE_DEFAULTS,
-  });
+  const [models, setModels] = useState<Record<LlmUseCase, string>>(emptyLlmModels());
   const [hasOpenRouterApiKey, setHasOpenRouterApiKey] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -44,7 +35,7 @@ export default function LlmConfigModal({
     fetch("/api/llm-config")
       .then((r) => r.json())
       .then((data: LlmConfigResponse) => {
-        if (data.models) setModels({ ...LLM_USE_CASE_DEFAULTS, ...data.models });
+        if (data.models) setModels({ ...emptyLlmModels(), ...data.models });
         setHasOpenRouterApiKey(!!data.hasOpenRouterApiKey);
       })
       .catch(() => setMessage("No se pudo cargar la configuración LLM."))
@@ -52,6 +43,10 @@ export default function LlmConfigModal({
   }, [isOpen]);
 
   const handleSave = async () => {
+    if (!isLlmModelsComplete(models)) {
+      setMessage("Debe configurar un modelo para cada función.");
+      return;
+    }
     setSaving(true);
     setMessage(null);
     try {
@@ -62,7 +57,7 @@ export default function LlmConfigModal({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Error al guardar");
-      if (data.models) setModels({ ...LLM_USE_CASE_DEFAULTS, ...data.models });
+      if (data.models) setModels({ ...emptyLlmModels(), ...data.models });
       setHasOpenRouterApiKey(!!data.hasOpenRouterApiKey);
       setMessage("Configuración LLM guardada.");
     } catch (e) {
@@ -132,12 +127,11 @@ export default function LlmConfigModal({
                 </h3>
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                   ID de modelo en OpenRouter (ej.{" "}
-                  <code className="text-[11px]">openai/gpt-4o</code>,{" "}
-                  <code className="text-[11px]">anthropic/claude-3.5-sonnet</code>). Se guardan en
-                  la base de datos y aplican en local y en Vercel.
+                  <code className="text-[11px]">openai/gpt-4o</code>). Todos los campos son
+                  obligatorios; no hay modelos por defecto.
                 </p>
                 <div className="mt-3 space-y-3">
-                  {USE_CASE_ORDER.map((useCase) => (
+                  {LLM_USE_CASES.map((useCase) => (
                     <div key={useCase}>
                       <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
                         {LLM_USE_CASE_LABELS[useCase]}
@@ -148,8 +142,9 @@ export default function LlmConfigModal({
                         onChange={(e) =>
                           setModels((prev) => ({ ...prev, [useCase]: e.target.value }))
                         }
-                        placeholder={LLM_USE_CASE_DEFAULTS[useCase]}
+                        placeholder="proveedor/modelo"
                         className={inputClass}
+                        required
                       />
                     </div>
                   ))}

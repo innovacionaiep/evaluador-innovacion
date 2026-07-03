@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertLlmModelsConfigured } from "@/lib/llm-config-server";
 import { runExtractPipeline } from "@/lib/project-extract-pipeline";
 import { saveProjectBuffersToSession } from "@/lib/session-project-files";
 
@@ -76,6 +77,7 @@ async function parseExtractRequest(request: Request): Promise<ExtractParams> {
 /** Extrae proyecto con pipeline LLM-first: RAG por sesión + búsqueda integral por elemento. */
 export async function POST(request: Request) {
   try {
+    await assertLlmModelsConfigured();
     const params = await parseExtractRequest(request);
 
     if (params.projectFilePaths.length === 0) {
