@@ -41,21 +41,21 @@ function ChunkList({ chunks }: { chunks: AgentChunkPreview[] }) {
         {open ? "Ocultar" : "Ver"} {chunks.length} fragmento(s)
       </button>
       {open && (
-        <ul className="mt-1.5 max-h-48 space-y-1.5 overflow-y-auto rounded border border-gray-200 bg-white/80 p-2 dark:border-gray-600 dark:bg-gray-900/50">
+        <ul className="mt-1.5 max-h-48 space-y-1.5 overflow-y-auto rounded border border-border bg-surface-overlay/80 p-2">
           {chunks.map((c) => (
-            <li key={c.id} className="text-xs text-gray-700 dark:text-gray-300">
-              <div className="font-medium text-gray-800 dark:text-gray-200">
+            <li key={c.id} className="text-xs text-foreground-muted">
+              <div className="font-medium text-foreground">
                 {c.docName}
                 {c.printedPage != null
                   ? ` · pág. ${c.printedPage}`
                   : c.page != null
                     ? ` · PDF ${c.page}`
                     : ""}
-                <span className="ml-1 font-normal text-gray-500">
+                <span className="ml-1 font-normal text-foreground-muted">
                   (score {c.score}, {c.charCount.toLocaleString("es")} car.)
                 </span>
               </div>
-              <p className="mt-0.5 text-gray-600 dark:text-gray-400">{c.preview}</p>
+              <p className="mt-0.5 text-foreground-muted">{c.preview}</p>
             </li>
           ))}
         </ul>
@@ -101,13 +101,13 @@ export default function AgentTrace({
   if (entries.length === 0 && !isActive) return null;
 
   return (
-    <div className="mb-2 rounded-lg border border-dashed border-gray-300 bg-gray-50/90 dark:border-gray-600 dark:bg-gray-900/40">
+    <div className="mb-2 max-w-full min-w-0 overflow-hidden rounded-lg border border-dashed border-border bg-surface-elevated/60">
       <button
         type="button"
         onClick={() => setCollapsed((v) => !v)}
         className="flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left"
       >
-        <span className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+        <span className="text-xs font-semibold uppercase tracking-wide text-foreground-muted">
           Actividad del agente
           {isActive && (
             <span className="ml-2 inline-flex items-center gap-1 font-normal normal-case text-gray-400">
@@ -116,10 +116,10 @@ export default function AgentTrace({
             </span>
           )}
         </span>
-        <span className="text-xs text-gray-400">{collapsed ? "Mostrar" : "Ocultar"}</span>
+        <span className="text-xs text-foreground-muted">{collapsed ? "Mostrar" : "Ocultar"}</span>
       </button>
       {!collapsed && (
-        <ol className="space-y-2 border-t border-gray-200 px-2.5 py-2 dark:border-gray-700">
+        <ol className="space-y-2 border-t border-border px-2.5 py-2">
           {entries.map((entry) => (
             <li key={entry.id} className="agent-trace-step-in flex gap-2 text-xs">
               <span className={`mt-0.5 shrink-0 ${KIND_STYLES[entry.kind]}`} aria-hidden>
@@ -140,11 +140,11 @@ export default function AgentTrace({
             </li>
           ))}
           {isActive && entries.length === 0 && (
-            <li className="text-xs text-gray-500 dark:text-gray-400">Iniciando…</li>
+            <li className="text-xs text-foreground-muted">Iniciando…</li>
           )}
           {isRevealing && (
-            <li className="flex gap-2 text-xs text-gray-500 dark:text-gray-400">
-              <span className="mt-0.5 inline-block h-3 w-3 animate-pulse rounded-full bg-gray-400 dark:bg-gray-500" aria-hidden />
+            <li className="flex gap-2 text-xs text-foreground-muted">
+              <span className="mt-0.5 inline-block h-3 w-3 animate-pulse rounded-full bg-foreground-muted/50" aria-hidden />
               <span>Preparando siguiente paso…</span>
             </li>
           )}

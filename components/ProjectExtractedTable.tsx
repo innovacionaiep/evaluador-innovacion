@@ -88,13 +88,13 @@ export default function ProjectExtractedTable({
   }
 
   return (
-    <table className="w-full border-collapse border border-gray-300 dark:border-gray-600">
+    <table className="w-full border-collapse border border-border">
       <thead>
-        <tr className="bg-gray-100 dark:bg-gray-800">
-          <th className="border border-gray-300 px-3 py-2 text-left font-semibold dark:border-gray-600">Sección</th>
-          <th className="border border-gray-300 px-3 py-2 text-left font-semibold dark:border-gray-600">Elemento</th>
-          <th className="border border-gray-300 px-3 py-2 text-left font-semibold dark:border-gray-600">Contenido</th>
-          <th className="border border-gray-300 px-3 py-2 text-left font-semibold dark:border-gray-600 w-28">Estado</th>
+        <tr className="bg-surface-elevated">
+          <th className="border border-border px-3 py-2 text-left font-semibold">Sección</th>
+          <th className="border border-border px-3 py-2 text-left font-semibold">Elemento</th>
+          <th className="border border-border px-3 py-2 text-left font-semibold">Contenido</th>
+          <th className="border border-border px-3 py-2 text-left font-semibold w-28">Estado</th>
         </tr>
       </thead>
       <tbody>
@@ -103,14 +103,14 @@ export default function ProjectExtractedTable({
           return (
             <tr
               key={i}
-              className={`border-b border-gray-200 dark:border-gray-700 ${incomplete ? "bg-amber-50/60 dark:bg-amber-950/20" : ""}`}
+              className={`border-b border-border ${incomplete ? "bg-amber-50/60 dark:bg-amber-950/20" : ""}`}
             >
-              <td className="border border-gray-300 px-3 py-2 align-top dark:border-gray-600">{row.section}</td>
-              <td className="border border-gray-300 px-3 py-2 align-top dark:border-gray-600">{row.element}</td>
-              <td className="border border-gray-300 px-3 py-2 align-top dark:border-gray-600 whitespace-pre-wrap">
+              <td className="border border-border px-3 py-2 align-top">{row.section}</td>
+              <td className="border border-border px-3 py-2 align-top">{row.element}</td>
+              <td className="border border-border px-3 py-2 align-top whitespace-pre-wrap">
                 {row.content.trim() || <span className="italic text-amber-700 dark:text-amber-400">Vacío</span>}
               </td>
-              <td className="border border-gray-300 px-3 py-2 align-top dark:border-gray-600">
+              <td className="border border-border px-3 py-2 align-top">
                 {incomplete ? (
                   <span className="text-xs text-amber-700 dark:text-amber-400" title="No se pudo extraer contenido suficiente">
                     incompleto

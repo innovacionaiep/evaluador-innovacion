@@ -7,6 +7,12 @@ import { extractTextWithVision } from "@/lib/extract-with-vision";
 import type { ElementDef } from "@/lib/excel-heuristics";
 import { ingestProjectFiles } from "@/lib/project-ingest";
 import { extractElementHybrid } from "@/lib/project-extract-hybrid";
+import {
+  buildDuplicateRetryHint,
+  findDuplicateContentGroups,
+} from "@/lib/extract-duplicate-guard";
+import { looksLikeContinuityAnswer } from "@/lib/extract-content-clean";
+import { isFactorInnovadorElement } from "@/lib/form-row-extract";
 import { loadProjectStructuredIndex } from "@/lib/project-structured-index";
 import { projectIndexMatches } from "@/lib/project-vector-store";
 import { markIncompleteRows } from "@/lib/project-extract-validate";
@@ -147,7 +153,7 @@ export async function* runExtractPipeline(
 
   yield { type: "step", message: "Extracción LLM por elemento (búsqueda integral en el proyecto)…" };
 
-  const elementsTable: ElementRow[] = [];
+  let elementsTable: ElementRow[] = [];
 
   for (const element of configElements) {
     yield { type: "step", message: `Buscando en proyecto: ${element.title}…` };
@@ -163,6 +169,71 @@ export async function* runExtractPipeline(
     });
 
     yield { type: "element", name: element.title, method };
+  }
+
+  const duplicateGroups = findDuplicateContentGroups(elementsTable);
+  if (duplicateGroups.length > 0) {
+    yield {
+      type: "step",
+      message: `Detectadas ${duplicateGroups.length} respuesta(s) duplicada(s); re-extrayendo con revisión…`,
+    };
+
+    const byElement = new Map(elementsTable.map((r) => [r.element, r]));
+
+    for (const group of duplicateGroups) {
+      for (const title of group.titles) {
+        const def = configElements.find((e) => e.title === title);
+        if (!def) continue;
+
+        const others = group.titles.filter((t) => t !== title);
+        const hint = buildDuplicateRetryHint(title, others, group.sharedContent);
+
+        yield { type: "step", message: `Revisando duplicado: ${title}…` };
+
+        const { content, method } = await extractElementHybrid(sessionId, def, {
+          timeoutMs: ELEMENT_TIMEOUT_MS,
+          extraHints: hint,
+          skipDeterministic: true,
+        });
+
+        const row = byElement.get(title);
+        if (row) {
+          row.content = content;
+          yield { type: "element", name: title, method: `${method}:dup_retry` };
+        }
+      }
+    }
+
+    elementsTable = [...byElement.values()];
+  }
+
+  // Factor innovador no debe ser copia de continuidad
+  const continuityRow = elementsTable.find((r) => r.element.toLowerCase().includes("continuidad"));
+  const innovadorDef = configElements.find((e) => isFactorInnovadorElement(e));
+  if (continuityRow && innovadorDef) {
+    const innovadorRow = elementsTable.find((r) => r.element === innovadorDef.title);
+    if (
+      innovadorRow &&
+      (looksLikeContinuityAnswer(innovadorRow.content) ||
+        innovadorRow.content.trim() === continuityRow.content.trim())
+    ) {
+      yield {
+        type: "step",
+        message: `Corrigiendo Factor innovador (copiaba continuidad)…`,
+      };
+      const hint = buildDuplicateRetryHint(
+        innovadorDef.title,
+        [continuityRow.element],
+        continuityRow.content
+      );
+      const { content, method } = await extractElementHybrid(sessionId, innovadorDef, {
+        timeoutMs: ELEMENT_TIMEOUT_MS,
+        extraHints: hint,
+        skipDeterministic: false,
+      });
+      innovadorRow.content = content;
+      yield { type: "element", name: innovadorDef.title, method: `${method}:continuity_fix` };
+    }
   }
 
   const validatedTable = markIncompleteRows(elementsTable, configElements);

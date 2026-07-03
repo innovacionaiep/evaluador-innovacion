@@ -3,7 +3,7 @@ import {
   isObjectiveGeneralElement,
   isSpecificObjectivesElement,
 } from "@/lib/objective-extract";
-import { isFormRowElement } from "@/lib/form-row-extract";
+import { isFormRowElement, isContinuityElement } from "@/lib/form-row-extract";
 
 function normKey(text: string): string {
   return normalizeForMatch(text).replace(/\s+/g, " ").trim();
@@ -107,6 +107,37 @@ export function deduplicateExtractedContent(content: string, elementTitle?: stri
   return kept.join("\n\n");
 }
 
+/** Separa narrativa de continuidad del bloque de elementos innovadores (misma celda en algunos formularios). */
+export function splitContinuityFromInnovatorTail(text: string): string {
+  const t = text.trim();
+  if (!t) return t;
+
+  const markers = [
+    /\*\*Principales elementos innovadores/i,
+    /elementos innovadores y diferenciadores/i,
+    /cu[aá]les son los elementos innovadores/i,
+    /en esta nueva fase[,:]?\s*(los|las)?\s*principales/i,
+  ];
+
+  let cutAt = t.length;
+  for (const re of markers) {
+    const m = re.exec(t);
+    if (m?.index != null && m.index > 15) {
+      cutAt = Math.min(cutAt, m.index);
+    }
+  }
+  return t.slice(0, cutAt).trim();
+}
+
+/** Indica si el texto parece respuesta de continuidad, no de factor innovador. */
+export function looksLikeContinuityAnswer(text: string): boolean {
+  const n = normalizeForMatch(text);
+  return (
+    /^(si|sí),?\s/.test(n.slice(0, 8)) &&
+    (n.includes("continuidad") || n.includes("fase anterior") || n.includes("evolucion"))
+  );
+}
+
 /** Une partes de celdas adyacentes sin repetir valores idénticos. */
 export function joinUniqueParts(parts: string[]): string {
   return uniqueNonEmptyParts(parts).join("\n");
@@ -164,6 +195,9 @@ export function finalizeContentForElement(
     s = stripLeakedObjectiveSections(s);
   }
   s = truncateAtNextSection(s, element.title);
+  if (isContinuityElement(element)) {
+    s = splitContinuityFromInnovatorTail(s);
+  }
   if (isFormRowElement(element)) {
     return deduplicateExtractedContent(s);
   }

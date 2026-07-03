@@ -46,6 +46,8 @@ export async function POST(request: Request) {
     const history = historyRaw
       .slice(-MAX_HISTORY_MESSAGES)
       .map((m) => ({ role: m.role as "user" | "assistant", content: m.content.slice(0, MAX_MESSAGE_CHARS) }));
+    const bulkEvaluationContext =
+      typeof body?.bulkEvaluationContext === "string" ? body.bulkEvaluationContext.trim() : "";
 
     if (!Number.isInteger(evaluationTypeId) || evaluationTypeId < 1) {
       return NextResponse.json({ error: "evaluationTypeId required" }, { status: 400 });
@@ -65,6 +67,7 @@ export async function POST(request: Request) {
             projectFilePaths,
             projectElementsTable,
             projectStructuredData,
+            bulkEvaluationContext: bulkEvaluationContext || undefined,
             history,
           })) {
             emit(controller, encoder, event);

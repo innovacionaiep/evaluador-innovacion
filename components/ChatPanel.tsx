@@ -3,6 +3,10 @@
 import { useState, useRef } from "react";
 import type { ProjectStructuredData } from "@/lib/build-context";
 import AgentTrace from "@/components/AgentTrace";
+import BulkAgentPanel, { type BulkAgentSlot } from "@/components/BulkAgentPanel";
+import type { BulkProjectRow } from "@/hooks/useBulkEvaluation";
+import type { RubricScoreSchemaEntry } from "@/lib/evaluation-scores";
+import { buildBulkEvaluationChatContext } from "@/lib/bulk-chat-context";
 import type { AgentTraceEntry } from "@/lib/agent-events";
 import {
   applyChatStreamEvent,
@@ -18,6 +22,8 @@ import {
 import { createStaggeredTraceReveal } from "@/lib/trace-reveal";
 import type { EvaluateStreamEvent } from "@/lib/evaluate-pipeline";
 import { stripCharacterLimitAnnotations } from "@/lib/report-format-limits";
+import type { EvaluationMode } from "@/lib/evaluation-mode";
+import { countBulkIgnoredFiles, filterBulkProjectFiles } from "@/lib/evaluation-mode";
 
 export type ChatMessage = {
   role: "user" | "assistant";
@@ -73,10 +79,20 @@ export default function ChatPanel({
   activeTypeId,
   projectFilePaths,
   onProjectFilePathsChange,
+  projectFiles,
+  onProjectFilesChange,
   projectElementsTable,
   projectStructuredData,
   sessionId,
   onProjectElementsTableChange,
+  evaluationMode = "individual",
+  bulkFiles = [],
+  onBulkFilesChange,
+  bulkRunning = false,
+  bulkAgents = [],
+  bulkRows = [],
+  bulkScoreSchema = [],
+  onBulkEvaluate,
 }: {
   messages: ChatMessage[];
   onMessagesChange: (updater: (prev: ChatMessage[]) => ChatMessage[]) => void;
@@ -85,16 +101,27 @@ export default function ChatPanel({
   activeTypeId: number | null;
   projectFilePaths: string[];
   onProjectFilePathsChange: (paths: string[]) => void;
+  projectFiles: File[];
+  onProjectFilesChange: (files: File[]) => void;
   projectElementsTable: { element: string; content: string }[];
   projectStructuredData?: ProjectStructuredData;
   sessionId: string;
   onProjectElementsTableChange?: (rows: { element: string; content: string }[]) => void;
+  evaluationMode?: EvaluationMode;
+  bulkFiles?: File[];
+  onBulkFilesChange?: (files: File[]) => void;
+  bulkRunning?: boolean;
+  bulkAgents?: BulkAgentSlot[];
+  bulkRows?: BulkProjectRow[];
+  bulkScoreSchema?: RubricScoreSchemaEntry[];
+  onBulkEvaluate?: () => void;
 }) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [evaluating, setEvaluating] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const traceRevealRef = useRef<ReturnType<typeof createStaggeredTraceReveal> | null>(null);
   const evaluateRevealRef = useRef<ReturnType<typeof createStaggeredTraceReveal> | null>(null);
   const evaluateTraceMsgIndexRef = useRef(-1);
@@ -133,6 +160,11 @@ export default function ChatPanel({
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
     try {
+      const bulkEvaluationContext =
+        evaluationMode === "bulk" && bulkRows.length > 0
+          ? buildBulkEvaluationChatContext(bulkRows, bulkScoreSchema)
+          : undefined;
+
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -146,6 +178,7 @@ export default function ChatPanel({
             !projectElementsTable?.length && projectStructuredData
               ? projectStructuredData
               : undefined,
+          bulkEvaluationContext,
           messages: messages.slice(0, -1),
         }),
         signal: controller.signal,
@@ -367,6 +400,11 @@ export default function ChatPanel({
               onReportContentChange(formatReportContent(reportContent));
               continue;
             }
+            if (event.type === "report_content") {
+              reportContent = event.content;
+              onReportContentChange(formatReportContent(reportContent));
+              continue;
+            }
             streamState = processEvaluateEvent(event, streamState, true);
           }
         }
@@ -375,6 +413,9 @@ export default function ChatPanel({
           if (event) {
             if (event.type === "content") {
               reportContent += event.chunk;
+              onReportContentChange(formatReportContent(reportContent));
+            } else if (event.type === "report_content") {
+              reportContent = event.content;
               onReportContentChange(formatReportContent(reportContent));
             } else {
               streamState = processEvaluateEvent(event, streamState, false);
@@ -413,25 +454,55 @@ export default function ChatPanel({
     }
   };
 
+  const handleEvaluateClick = () => {
+    if (evaluationMode === "bulk") {
+      onBulkEvaluate?.();
+      return;
+    }
+    void handleEvaluate();
+  };
+
+  const handleFolderSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files?.length || !onBulkFilesChange) return;
+    const all = Array.from(files);
+    const filtered = filterBulkProjectFiles(all);
+    const ignored = countBulkIgnoredFiles(all);
+    onBulkFilesChange(filtered);
+
+    if (filtered.length === 0) {
+      onMessagesChange((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content:
+            "No se encontraron proyectos válidos en la carpeta (se requieren archivos Excel, PDF o Word).",
+        },
+      ]);
+    } else {
+      const ignoredNote =
+        ignored > 0
+          ? ` Se omitieron ${ignored} archivo(s) auxiliar(es) del sistema (p. ej. ~$ de Excel u ocultos). El aviso del navegador puede contar más archivos de los que se evaluarán.`
+          : "";
+      onMessagesChange((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: `Carpeta cargada: ${filtered.length} proyecto(s) listo(s) para evaluar.${ignoredNote}`,
+        },
+      ]);
+    }
+    e.target.value = "";
+  };
+
   const handleUploadProject = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files?.length) return;
     setUploading(true);
     try {
-      const form = new FormData();
-      form.set("kind", "project");
-      form.set("sessionId", sessionId);
-      for (let i = 0; i < files.length; i++) form.append("files", files[i]);
-      const res = await fetch("/api/upload", { method: "POST", body: form });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        alert(err?.error || "Error subiendo archivos");
-        return;
-      }
-      const data = await res.json();
-      if (Array.isArray(data.paths)) {
-        onProjectFilePathsChange(data.paths);
-      }
+      const list = Array.from(files);
+      onProjectFilesChange(list);
+      onProjectFilePathsChange([]);
     } finally {
       setUploading(false);
       e.target.value = "";
@@ -441,105 +512,179 @@ export default function ChatPanel({
   /** Nombre visible del archivo (sin prefijo de sesión si existe). */
   const displayName = (path: string) => path.replace(/^[^/]+\//, "") || path;
 
+  const isBulkCompletionMessage = (content: string) =>
+    content.includes("Evaluación masiva finalizada");
+
+  const bulkCompletionIndex =
+    evaluationMode === "bulk"
+      ? messages.findIndex(
+          (m) => m.role === "assistant" && isBulkCompletionMessage(m.content)
+        )
+      : -1;
+
+  const bulkIntroMessages =
+    bulkCompletionIndex >= 0 ? messages.slice(0, bulkCompletionIndex) : messages;
+  const bulkOutroMessages =
+    bulkCompletionIndex >= 0 ? messages.slice(bulkCompletionIndex) : [];
+
+  const useBulkAgentPanels = evaluationMode === "bulk" && bulkAgents.length > 0;
+
+  const isBulkStatusMessage = (content: string) =>
+    content.includes("Iniciando evaluación masiva") ||
+    content.includes("Evaluación masiva finalizada") ||
+    content.startsWith("Carpeta cargada:");
+
+  const renderChatMessage = (m: ChatMessage, i: number, isLastInSection: boolean) => {
+    const isBulkInteractiveReply =
+      evaluationMode === "bulk" &&
+      m.role === "assistant" &&
+      (m.traceRevealing || (m.trace != null && m.trace.length > 0));
+
+    const allowBulkAgentUi =
+      evaluationMode !== "bulk" ||
+      isBulkInteractiveReply ||
+      (loading && isLastInSection && m.role === "assistant" && !isBulkStatusMessage(m.content));
+
+    const showMessageAgentTrace =
+      m.role === "assistant" &&
+      allowBulkAgentUi &&
+      (m.trace?.length ||
+        m.traceRevealing ||
+        (loading && isLastInSection) ||
+        (evaluationMode !== "bulk" && (evaluating || bulkRunning) && isLastInSection));
+
+    const showMessageSpinner =
+      m.role === "assistant" &&
+      !m.content &&
+      allowBulkAgentUi &&
+      isLastInSection &&
+      (loading || evaluating || bulkRunning || m.traceRevealing);
+
+    return (
+      <div
+        key={`msg-${i}-${m.role}-${m.content.slice(0, 24)}`}
+        className={`mb-3 flex min-w-0 max-w-full ${m.role === "user" ? "justify-end" : "justify-start"}`}
+      >
+        <div
+          className={`min-w-0 max-w-[85%] rounded-lg px-3 py-2 ${
+            m.role === "user"
+              ? "bg-gray-200 dark:bg-gray-700"
+              : "bg-gray-100 dark:bg-gray-800"
+          }`}
+        >
+          <span
+            className={`text-xs font-medium ${
+              m.role === "user"
+                ? "text-blue-600 dark:text-blue-400"
+                : "text-red-600 dark:text-red-400"
+            }`}
+          >
+            {m.role === "user" ? "Usuario" : "Evaluador"}
+          </span>
+          {showMessageAgentTrace ? (
+            <div className="mt-1.5 min-w-0 max-w-full overflow-hidden">
+              <AgentTrace
+                entries={m.trace ?? []}
+                isActive={
+                  (loading || evaluating || bulkRunning || m.traceRevealing) &&
+                  isLastInSection
+                }
+                isRevealing={!!m.traceRevealing}
+              />
+            </div>
+          ) : null}
+          {(m.content || showMessageSpinner) && (
+            <div className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden break-words text-sm whitespace-pre-wrap">
+              {showMessageSpinner ? (
+                <>
+                  <LoadingSpinner />
+                  <span className="text-gray-500 dark:text-gray-400">
+                    {m.traceRevealing
+                      ? evaluating
+                        ? "Evaluando…"
+                        : "Analizando…"
+                      : m.trace?.length
+                        ? evaluating
+                          ? "Generando informe…"
+                          : "Generando respuesta…"
+                        : evaluating
+                          ? "Evaluando…"
+                          : "Respondiendo…"}
+                  </span>
+                </>
+              ) : (
+                m.content
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="flex h-full flex-col bg-gray-50 dark:bg-[#1e1e1e]">
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-        {messages.length === 0 && (
+      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-3">
+        {messages.length === 0 && evaluationMode !== "bulk" && (
           <p className="text-sm text-gray-500 dark:text-gray-400">
             {activeTypeId
               ? "Escriba un mensaje o suba documentos del proyecto y pulse Evaluar."
               : "Seleccione un tipo de evaluación o cree uno en Configuración."}
           </p>
         )}
-        {messages.map((m, i) => (
-          <div
-            key={i}
-            className={`mb-3 flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
-          >
-            <div
-              className={`max-w-[85%] rounded-lg px-3 py-2 ${
-                m.role === "user"
-                  ? "bg-gray-200 dark:bg-gray-700"
-                  : "bg-gray-100 dark:bg-gray-800"
-              }`}
-            >
-              <span
-                className={`text-xs font-medium ${
-                  m.role === "user"
-                    ? "text-blue-600 dark:text-blue-400"
-                    : "text-red-600 dark:text-red-400"
-                }`}
-              >
-                {m.role === "user" ? "Usuario" : "Evaluador"}
-              </span>
-              {m.role === "assistant" &&
-              (m.trace?.length ||
-                m.traceRevealing ||
-                (loading && i === messages.length - 1) ||
-                (evaluating && i === messages.length - 1)) ? (
-                <div className="mt-1.5">
-                  <AgentTrace
-                    entries={m.trace ?? []}
-                    isActive={
-                      (loading || evaluating || m.traceRevealing) && i === messages.length - 1
-                    }
-                    isRevealing={!!m.traceRevealing}
-                  />
-                </div>
-              ) : null}
-              {(m.content ||
-                (m.role === "assistant" &&
-                  !m.content &&
-                  (loading || evaluating || m.traceRevealing) &&
-                  i === messages.length - 1)) && (
-                <div className="mt-1 flex items-center gap-2 whitespace-pre-wrap break-words text-sm">
-                  {m.role === "assistant" &&
-                  !m.content &&
-                  (loading || evaluating || m.traceRevealing) &&
-                  i === messages.length - 1 ? (
-                    <>
-                      <LoadingSpinner />
-                      <span className="text-gray-500 dark:text-gray-400">
-                        {m.traceRevealing
-                          ? evaluating
-                            ? "Evaluando…"
-                            : "Analizando…"
-                          : m.trace?.length
-                            ? evaluating
-                              ? "Generando informe…"
-                              : "Generando respuesta…"
-                            : evaluating
-                              ? "Evaluando…"
-                              : "Respondiendo…"}
-                      </span>
-                    </>
-                  ) : (
-                    m.content
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
+        {messages.length === 0 && evaluationMode === "bulk" && !useBulkAgentPanels && (
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            {activeTypeId
+              ? "Elija una carpeta con proyectos y pulse Evaluar para iniciar la evaluación masiva."
+              : "Seleccione un tipo de evaluación o cree uno en Configuración."}
+          </p>
+        )}
+        {evaluationMode === "bulk" ? (
+          <>
+            {bulkIntroMessages.map((m, i) =>
+              renderChatMessage(m, i, i === bulkIntroMessages.length - 1 && !useBulkAgentPanels)
+            )}
+            {useBulkAgentPanels && <BulkAgentPanel agents={bulkAgents} />}
+            {bulkOutroMessages.map((m, i) =>
+              renderChatMessage(
+                m,
+                bulkIntroMessages.length + i,
+                i === bulkOutroMessages.length - 1
+              )
+            )}
+          </>
+        ) : (
+          messages.map((m, i) => renderChatMessage(m, i, i === messages.length - 1))
+        )}
       </div>
-      {projectFilePaths.length > 0 && (
+      {evaluationMode === "individual" && (projectFiles.length > 0 || projectFilePaths.length > 0) && (
         <div className="shrink-0 border-t border-gray-200 px-4 py-1.5 dark:border-gray-700">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-xs text-gray-500 dark:text-gray-400">
-              Archivos del proyecto ({projectFilePaths.length}):
+              Archivos del proyecto ({projectFiles.length || projectFilePaths.length}):
             </span>
-            {projectFilePaths.map((path, idx) => (
+            {(projectFiles.length > 0
+              ? projectFiles.map((f) => f.name)
+              : projectFilePaths.map(displayName)
+            ).map((name, idx) => (
               <span
-                key={path}
+                key={`${name}-${idx}`}
                 className="inline-flex max-w-[180px] items-center gap-1 rounded bg-gray-100 py-0.5 pl-1.5 pr-0.5 dark:bg-gray-700/80"
-                title={path}
+                title={name}
               >
                 <span className="min-w-0 truncate text-xs text-gray-600 dark:text-gray-300">
-                  {displayName(path)}
+                  {name}
                 </span>
                 <button
                   type="button"
-                  onClick={() => onProjectFilePathsChange(projectFilePaths.filter((_, i) => i !== idx))}
+                  onClick={() => {
+                    if (projectFiles.length > 0) {
+                      onProjectFilesChange(projectFiles.filter((_, i) => i !== idx));
+                    } else {
+                      onProjectFilePathsChange(projectFilePaths.filter((_, i) => i !== idx));
+                    }
+                    onProjectFilePathsChange([]);
+                  }}
                   className="shrink-0 rounded p-0.5 text-gray-400 hover:bg-gray-200 hover:text-gray-600 dark:hover:bg-gray-600 dark:hover:text-gray-200"
                   title="Quitar archivo"
                   aria-label="Quitar archivo"
@@ -553,6 +698,31 @@ export default function ChatPanel({
           </div>
         </div>
       )}
+      {evaluationMode === "bulk" && bulkFiles.length > 0 && (
+        <div className="shrink-0 border-t border-gray-200 px-4 py-1.5 dark:border-gray-700">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs text-gray-500 dark:text-gray-400">
+              Proyectos en carpeta ({bulkFiles.length}):
+            </span>
+            {bulkFiles.slice(0, 5).map((file) => (
+              <span
+                key={file.name}
+                className="inline-flex max-w-[180px] items-center rounded bg-gray-100 py-0.5 px-1.5 dark:bg-gray-700/80"
+                title={file.name}
+              >
+                <span className="min-w-0 truncate text-xs text-gray-600 dark:text-gray-300">
+                  {file.name}
+                </span>
+              </span>
+            ))}
+            {bulkFiles.length > 5 && (
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                +{bulkFiles.length - 5} más
+              </span>
+            )}
+          </div>
+        </div>
+      )}
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-gray-200 px-4 py-3 dark:border-gray-700">
         <input
           type="text"
@@ -561,24 +731,40 @@ export default function ChatPanel({
           onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
           placeholder="Chat"
           className="min-w-[200px] flex-1 rounded-full border border-gray-300 px-4 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-          disabled={!activeTypeId || loading}
+          disabled={!activeTypeId || loading || bulkRunning}
         />
         <button
           type="button"
-          onClick={handleEvaluate}
-          disabled={!activeTypeId || evaluating}
+          onClick={handleEvaluateClick}
+          disabled={
+            !activeTypeId ||
+            evaluating ||
+            bulkRunning ||
+            (evaluationMode === "bulk" && bulkFiles.length === 0)
+          }
           className="rounded-full bg-[#4b5563] px-4 py-2 text-sm font-medium text-white hover:bg-[#374151] focus:outline-none focus:ring-2 focus:ring-gray-500 dark:bg-[#6b7280] dark:hover:bg-[#4b5563] disabled:opacity-50"
         >
-          Evaluar
+          {bulkRunning ? "Evaluando…" : "Evaluar"}
         </button>
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={!activeTypeId || uploading}
-          className="rounded-full border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 dark:border-gray-600 dark:bg-[#374151] dark:text-gray-200 dark:hover:bg-[#4b5563] disabled:opacity-50"
-        >
-          {uploading ? "Subiendo…" : "Subir archivos"}
-        </button>
+        {evaluationMode === "individual" ? (
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={!activeTypeId || uploading || bulkRunning}
+            className="rounded-full border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 dark:border-gray-600 dark:bg-[#374151] dark:text-gray-200 dark:hover:bg-[#4b5563] disabled:opacity-50"
+          >
+            {uploading ? "Subiendo…" : "Subir archivos"}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => folderInputRef.current?.click()}
+            disabled={!activeTypeId || bulkRunning}
+            className="rounded-full border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 dark:border-gray-600 dark:bg-[#374151] dark:text-gray-200 dark:hover:bg-[#4b5563] disabled:opacity-50"
+          >
+            Elegir carpeta
+          </button>
+        )}
         <input
           ref={fileInputRef}
           type="file"
@@ -586,6 +772,16 @@ export default function ChatPanel({
           accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.json"
           className="hidden"
           onChange={handleUploadProject}
+        />
+        <input
+          ref={folderInputRef}
+          type="file"
+          // @ts-expect-error webkitdirectory no está en tipos estándar
+          webkitdirectory=""
+          directory=""
+          multiple
+          className="hidden"
+          onChange={handleFolderSelect}
         />
       </div>
     </div>

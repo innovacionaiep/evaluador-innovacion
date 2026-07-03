@@ -53,6 +53,35 @@ export function applyEvaluateStreamEvent(
         live: false,
       });
       break;
+    case "subdimension_score":
+      if (event.score != null) {
+        trace.push({
+          id: nextTraceId(),
+          kind: "step",
+          title: `Nota ${event.name}: ${event.score}`,
+          detail: event.dimension,
+          live: false,
+        });
+      }
+      break;
+    case "scores_summary":
+      if (event.overallScore != null) {
+        trace.push({
+          id: nextTraceId(),
+          kind: "step",
+          title: `Indicador general: ${event.overallScore}`,
+          live: false,
+        });
+      }
+      break;
+    case "evaluation_summary":
+      trace.push({
+        id: nextTraceId(),
+        kind: "step",
+        title: "Síntesis evaluativa generada",
+        live: false,
+      });
+      break;
     case "formatting":
       trace.push({
         id: nextTraceId(),

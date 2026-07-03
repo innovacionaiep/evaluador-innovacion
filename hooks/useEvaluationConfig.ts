@@ -12,11 +12,13 @@ export type ElementWithSection = {
 export function useEvaluationConfig(activeTypeId: number | null, configOpen: boolean) {
   const [elementsWithSection, setElementsWithSection] = useState<ElementWithSection[]>([]);
   const [knowledgeDocNames, setKnowledgeDocNames] = useState<string[]>([]);
+  const [rubricPrompt, setRubricPrompt] = useState("");
 
   useEffect(() => {
     if (!activeTypeId) {
       setElementsWithSection([]);
       setKnowledgeDocNames([]);
+      setRubricPrompt("");
       return;
     }
     fetch(`/api/config/${activeTypeId}`)
@@ -40,12 +42,14 @@ export function useEvaluationConfig(activeTypeId: number | null, configOpen: boo
         setElementsWithSection(mapped);
         const paths = Array.isArray(data.knowledge_paths) ? data.knowledge_paths : [];
         setKnowledgeDocNames(knowledgePathsToLabels(paths));
+        setRubricPrompt(typeof data.rubric_prompt === "string" ? data.rubric_prompt : "");
       })
       .catch(() => {
         setElementsWithSection([]);
         setKnowledgeDocNames([]);
+        setRubricPrompt("");
       });
   }, [activeTypeId, configOpen]);
 
-  return { elementsWithSection, knowledgeDocNames };
+  return { elementsWithSection, knowledgeDocNames, rubricPrompt };
 }

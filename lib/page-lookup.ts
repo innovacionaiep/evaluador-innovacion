@@ -1,4 +1,4 @@
-import { loadChunks, type StoredChunk } from "@/lib/vector-store";
+import { loadChunksAsync, type StoredChunk } from "@/lib/vector-store";
 
 export type PageChunk = StoredChunk & { score: number };
 
@@ -137,12 +137,12 @@ function collectAnchorIndices(all: StoredChunk[], targetPage: number): Set<numbe
 /**
  * Recupera chunks de una página impresa del manual Oslo.
  */
-export function retrieveChunksForPrintedPage(
+export async function retrieveChunksForPrintedPage(
   evaluationTypeId: number,
   targetPage: number,
   maxChars: number
-): PageChunk[] {
-  const all = loadChunks(evaluationTypeId);
+): Promise<PageChunk[]> {
+  const all = await loadChunksAsync(evaluationTypeId);
   if (all.length === 0) return [];
 
   const anchorIndices = collectAnchorIndices(all, targetPage);

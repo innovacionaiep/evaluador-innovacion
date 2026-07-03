@@ -1,5 +1,6 @@
 import type { ElementDef } from "@/lib/excel-heuristics";
 import { isLikelyGanttHeaderRowContent, isProjectNameElement } from "@/lib/excel-sheet-priority";
+import { isGanttActivitiesElement } from "@/lib/sheet-element-routing";
 import { isSpecificObjectivesElement } from "@/lib/objective-extract";
 import { isContinuityElement, isFormRowElement } from "@/lib/form-row-extract";
 
@@ -36,6 +37,14 @@ export type ElementRowWithStatus = {
 export function isIncompleteElement(element: ElementDef, content: string): boolean {
   const trimmed = content.trim();
   if (!trimmed || trimmed === "—") return true;
+
+  if (isGanttActivitiesElement(element)) {
+    const numbered = (trimmed.match(/^\s*\d+[\.\)]\s/mg) ?? []).length;
+    if (numbered >= 2) return false;
+    if (numbered >= 1 && trimmed.length >= 60) return false;
+    if (trimmed.length >= 120) return false;
+    return trimmed.length < 30;
+  }
 
   if (isLikelyGanttHeaderRowContent(trimmed)) return true;
 

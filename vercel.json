@@ -1,0 +1,22 @@
+{
+  "functions": {
+    "app/api/evaluate/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/project-extract/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/upload/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/config/[id]/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/config/[id]/reindex/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/chat/route.ts": {
+      "maxDuration": 180
+    }
+  }
+}

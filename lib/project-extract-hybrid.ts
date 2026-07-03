@@ -48,14 +48,15 @@ function isSolutionAdvanceElement(element: ElementDef): boolean {
 async function runLlmExtract(
   sessionId: string,
   element: ElementDef,
-  options?: { timeoutMs?: number },
+  options?: { timeoutMs?: number; extraHints?: string },
   extraHints = ""
 ): Promise<ExtractElementResult> {
   const hints = buildElementLlmHints(element);
+  const combinedHints = hints + (options?.extraHints ?? "") + extraHints;
   const { extractElementLlmFirst } = await import("@/lib/project-extract-llm");
   return extractElementLlmFirst(sessionId, element, {
     timeoutMs: options?.timeoutMs,
-    extraHints: hints + extraHints,
+    extraHints: combinedHints,
   });
 }
 
@@ -185,7 +186,10 @@ export function buildElementLlmHints(element: ElementDef): string {
   }
   if (/factor innovador/.test(t)) {
     hints.push(
-      'Si hay un "Sí/No" breve, busca también el párrafo explicativo en la misma sección.'
+      'Usa la fila "Factor innovador del proyecto" / "Diferenciación y propuesta de valor" en Seguimiento o Resumen Proyecto.'
+    );
+    hints.push(
+      "NO copies el texto de Continuidad de fases anteriores. Son campos distintos con respuestas distintas."
     );
   }
   if (/escalabilidad/.test(t)) {
@@ -216,7 +220,7 @@ export function buildElementLlmHints(element: ElementDef): string {
 export async function extractElementHybrid(
   sessionId: string,
   element: ElementDef,
-  options?: { timeoutMs?: number }
+  options?: { timeoutMs?: number; extraHints?: string; skipDeterministic?: boolean }
 ): Promise<ExtractElementResult> {
   const structuredFiles = structuredIndexToExcelFiles(sessionId);
   let result: ExtractElementResult;
@@ -264,7 +268,7 @@ export async function extractElementHybrid(
     return ensureNonEmpty(sessionId, element, result, options);
   }
 
-  const deterministic = tryDeterministicExtract(structuredFiles, element);
+  const deterministic = options?.skipDeterministic ? null : tryDeterministicExtract(structuredFiles, element);
   if (deterministic?.content.trim()) {
     return ensureNonEmpty(sessionId, element, deterministic, options);
   }

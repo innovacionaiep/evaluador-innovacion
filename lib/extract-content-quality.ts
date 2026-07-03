@@ -1,4 +1,5 @@
 import type { ElementDef } from "@/lib/excel-heuristics";
+import { looksLikeContinuityAnswer } from "@/lib/extract-content-clean";
 import { normalizeForMatch } from "@/lib/text-match";
 
 /** El texto parece una pregunta de formulario, no una respuesta. */
@@ -39,6 +40,9 @@ export function isTrivialExtractedContent(element: ElementDef, content: string):
   if (/factor innovador|escalabilidad|sostenibilidad|resultados|objetivo de desarrollo/i.test(title)) {
     if (looksLikeFormQuestionContent(t)) return true;
     if (t.length < 15 && !/^s[ií]$/i.test(t)) return true;
+    if (/factor innovador|innovador del proyecto/.test(title) && looksLikeContinuityAnswer(t)) {
+      return true;
+    }
   }
 
   if (/^no$/i.test(t) && /factor innovador|innovador/i.test(title)) {

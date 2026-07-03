@@ -1,6 +1,6 @@
 import { getConfig } from "@/lib/db";
 import { buildSystemContext } from "@/lib/build-context";
-import { streamChat } from "@/lib/openrouter";
+import { streamChat, chatCompletion } from "@/lib/openrouter";
 import {
   charRange,
   findDimensionLimits,
@@ -11,6 +11,20 @@ import {
   type ReportFormatLimits,
   type SubdimensionFieldLimits,
 } from "@/lib/report-format-limits";
+import {
+  backfillSubdimensionScores,
+  buildEvaluationInputForSummary,
+  buildRubricScoreSchema,
+  computeWeightedIndicatorScore,
+  finalizeEvaluationSummary,
+  injectAuthoritativeScoresSection,
+  parseSubdimensionScore,
+  subdimensionScoreKey,
+} from "@/lib/evaluation-scores";
+import {
+  extractSubdimensionScoresViaJson,
+  mergeAuthoritativeScores,
+} from "@/lib/evaluation-scores-json";
 import {
   parseRubricDimensions,
   parseRubricSubdimensions,
@@ -29,6 +43,19 @@ export type EvaluateStreamEvent =
       index: number;
       total: number;
     }
+  | {
+      type: "subdimension_score";
+      dimension: string;
+      name: string;
+      score: number | null;
+    }
+  | {
+      type: "scores_summary";
+      subdimensionScores: Record<string, number | null>;
+      overallScore: number | null;
+    }
+  | { type: "evaluation_summary"; text: string }
+  | { type: "report_content"; content: string }
   | { type: "formatting"; message: string }
   | { type: "content"; chunk: string }
   | { type: "done" }
@@ -73,9 +100,22 @@ Usa ÚNICAMENTE:
 
 Incluye estas secciones con las longitudes indicadas (son instrucciones internas; NO las menciones en el texto):
 1. **Análisis** — entre ${a.min} y ${a.max} caracteres
-2. **Nota** — valor 1, 2, 3 o 4 según la rúbrica (puede ser breve, ej. "Nota: 3")
+2. **Nota** — OBLIGATORIO e INNEGOCIABLE:
+   - Una línea exacta con el formato: Nota: N
+   - N debe ser un único dígito: 1, 2, 3 o 4 (número arábigo, no palabras)
+   - Prohibido omitir la nota, usar rangos, decimales o frases como "nota alta"
 3. **Justificación** — entre ${j.min} y ${j.max} caracteres
 4. **Posibles mejoras** — entre ${m.min} y ${m.max} caracteres
+
+La línea "Nota: N" debe aparecer en su propia línea, después del Análisis y antes de la Justificación.
+Ejemplo válido:
+**Análisis**
+(texto del análisis)
+
+Nota: 3
+
+**Justificación**
+(texto)
 
 Si el contenido queda corto, amplía con detalle del proyecto y del marco teórico sin inventar hechos.
 
@@ -130,6 +170,45 @@ async function runRagLlmPass(params: RagLlmPassParams): Promise<string> {
   );
 }
 
+function evaluationSummaryPrompt(overallScore: number | null): string {
+  return `Redacta una SÍNTESIS FINAL DE LA EVALUACIÓN (máximo 300 caracteres).
+
+REGLAS OBLIGATORIAS:
+- NO describas el proyecto, su objetivo, beneficiarios ni actividades.
+- Resume el VEREDICTO evaluativo según la rúbrica IGIP: hallazgos evaluativos y conclusión.
+${overallScore != null ? `- Incluye la nota IGIP ponderada: ${overallScore}.` : "- Si puedes inferir la conclusión global, hazlo sin inventar una nota numérica."}
+- Español claro, sin títulos, sin listas, sin markdown.
+- Solo el texto de la síntesis evaluativa.`.trim();
+}
+
+async function generateEvaluationSummaryText(
+  summaryInput: string,
+  overallScore: number | null,
+  schema: ReturnType<typeof buildRubricScoreSchema>,
+  scores: Record<string, number | null>
+): Promise<string> {
+  let llmText = "";
+  try {
+    llmText = await collectStream(
+      [
+        {
+          role: "system",
+          content:
+            "Eres evaluador IGIP. Escribes síntesis evaluativas concisas. NUNCA describas el proyecto, sus objetivos ni actividades. Solo veredicto evaluativo.",
+        },
+        {
+          role: "user",
+          content: `${evaluationSummaryPrompt(overallScore)}\n\nDatos de evaluación (solo notas y conclusiones):\n${summaryInput.slice(0, 6000)}`,
+        },
+      ],
+      600
+    );
+  } catch {
+    llmText = "";
+  }
+  return finalizeEvaluationSummary(llmText, schema, scores, overallScore);
+}
+
 function buildFormatSystemPrompt(
   reportFormat: string,
   rawEvaluation: string,
@@ -174,6 +253,8 @@ export async function* runEvaluatePipeline(
 
   const rubricText = (config.rubric_prompt ?? "").trim();
   const dimensions = parseRubricDimensions(rubricText);
+  const scoreSchema = buildRubricScoreSchema(rubricText);
+  const subdimensionScores: Record<string, number | null> = {};
   const formatLimits = parseReportFormatLimits(reportFormat);
   const projectSummary = summarizeProjectForRag(projectElementsTable);
   const partialAnalyses: string[] = [];
@@ -220,47 +301,74 @@ export async function* runEvaluatePipeline(
     dimSections.push(`### Análisis breve\n\n${overview.trim()}`);
     yield { type: "dimension", name: dim.name, index: i + 1, total: dimensions.length };
 
-    for (let j = 0; j < subdims.length; j++) {
-      const sub = subdims[j];
+    if (subdims.length > 0) {
       yield {
         type: "step",
-        message: `Subdimensión ${j + 1}/${subdims.length} de ${dim.name}: ${sub.name}…`,
+        message: `Evaluando ${subdims.length} subdimensión(es) de ${dim.name} en paralelo…`,
       };
+    }
 
-      const fieldLimits =
-        findSubdimensionLimits(formatLimits, dim.name, sub.name) ?? {
-          analysis: 500,
-          justification: 500,
-          improvements: 500,
+    type SubdimResult = {
+      j: number;
+      sub: RubricSubdimension;
+      subAnalysis: string;
+      parsedScore: number | null;
+    };
+
+    const subdimResults = await Promise.all(
+      subdims.map(async (sub, j): Promise<SubdimResult> => {
+        const fieldLimits =
+          findSubdimensionLimits(formatLimits, dim.name, sub.name) ?? {
+            analysis: 500,
+            justification: 500,
+            improvements: 500,
+          };
+
+        const subQuery = [
+          dim.name,
+          sub.name,
+          sub.content.slice(0, 800),
+          "Manual Oslo innovación evaluación justificación mejoras",
+          projectSummary.slice(0, 600),
+        ].join(" ");
+
+        const subAnalysis = await runRagLlmPass({
+          evaluationTypeId,
+          projectElementsTable,
+          ragQuery: subQuery,
+          evaluateSubdimension: {
+            dimensionName: dim.name,
+            name: sub.name,
+            content: sub.content,
+          },
+          userPrompt: subdimensionUserPrompt(dim, sub, fieldLimits),
+          maxTokens: 8000,
+        });
+
+        return {
+          j,
+          sub,
+          subAnalysis,
+          parsedScore: parseSubdimensionScore(subAnalysis),
         };
+      })
+    );
 
-      const subQuery = [
-        dim.name,
-        sub.name,
-        sub.content.slice(0, 800),
-        "Manual Oslo innovación evaluación justificación mejoras",
-        projectSummary.slice(0, 600),
-      ].join(" ");
+    subdimResults.sort((a, b) => a.j - b.j);
 
-      const subAnalysis = await runRagLlmPass({
-        evaluationTypeId,
-        projectElementsTable,
-        ragQuery: subQuery,
-        evaluateSubdimension: {
-          dimensionName: dim.name,
-          name: sub.name,
-          content: sub.content,
-        },
-        userPrompt: subdimensionUserPrompt(dim, sub, fieldLimits),
-        maxTokens: 8000,
-      });
+    for (const result of subdimResults) {
+      dimSections.push(
+        `### Subdimensión: ${result.sub.name}\n\n${result.subAnalysis.trim()}`
+      );
 
-      dimSections.push(`### Subdimensión: ${sub.name}\n\n${subAnalysis.trim()}`);
+      const scoreKey = subdimensionScoreKey(dim.name, result.sub.name);
+      subdimensionScores[scoreKey] = result.parsedScore;
+
       yield {
         type: "subdimension",
         dimension: dim.name,
-        name: sub.name,
-        index: j + 1,
+        name: result.sub.name,
+        index: result.j + 1,
         total: subdims.length,
       };
     }
@@ -290,12 +398,82 @@ export async function* runEvaluatePipeline(
     { max_tokens: 8192, useCase: "evaluate" }
   )) {
     formatted += chunk;
+    if (chunk) {
+      yield { type: "content", chunk };
+    }
   }
 
   const sanitized = stripCharacterLimitAnnotations(formatted);
-  if (sanitized) {
-    yield { type: "content", chunk: sanitized };
+
+  yield {
+    type: "step",
+    message: "Extrayendo notas estructuradas (JSON) desde los análisis…",
+  };
+
+  const jsonScores = await extractSubdimensionScoresViaJson(
+    scoreSchema,
+    rawEvaluation,
+    (messages) =>
+      chatCompletion(messages, { max_tokens: 1024, temperature: 0.1, useCase: "evaluate" })
+  );
+
+  const regexBackfill = backfillSubdimensionScores(scoreSchema, {}, [
+    rawEvaluation,
+    sanitized,
+  ]);
+
+  Object.assign(
+    subdimensionScores,
+    mergeAuthoritativeScores(scoreSchema, jsonScores, [
+      regexBackfill,
+      subdimensionScores,
+    ])
+  );
+
+  for (const entry of scoreSchema) {
+    const score = subdimensionScores[entry.key];
+    yield {
+      type: "subdimension_score",
+      dimension: entry.dimension,
+      name: entry.name,
+      score,
+    };
   }
+
+  const overallScore = computeWeightedIndicatorScore(scoreSchema, subdimensionScores);
+
+  yield {
+    type: "step",
+    message: "Generando síntesis evaluativa final…",
+  };
+
+  const summaryInput = buildEvaluationInputForSummary(
+    rawEvaluation,
+    sanitized,
+    scoreSchema,
+    subdimensionScores
+  );
+  const evaluationSummary = await generateEvaluationSummaryText(
+    summaryInput,
+    overallScore,
+    scoreSchema,
+    subdimensionScores
+  );
+
+  const finalReport = injectAuthoritativeScoresSection(
+    sanitized,
+    scoreSchema,
+    subdimensionScores,
+    overallScore
+  );
+  yield { type: "report_content", content: finalReport };
+
+  yield {
+    type: "scores_summary",
+    subdimensionScores: { ...subdimensionScores },
+    overallScore,
+  };
+  yield { type: "evaluation_summary", text: evaluationSummary };
 
   yield { type: "done" };
 }

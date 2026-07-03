@@ -22,6 +22,8 @@ export type ChatAgentInput = {
   projectFilePaths: string[];
   projectElementsTable?: { element: string; content: string }[];
   projectStructuredData?: ProjectStructuredData;
+  /** Resultados de evaluación masiva (informes y notas) para preguntas post-evaluación. */
+  bulkEvaluationContext?: string;
   history: { role: "user" | "assistant"; content: string }[];
 };
 
@@ -157,8 +159,11 @@ export async function* runChatAgent(input: ChatAgentInput): AsyncGenerator<ChatS
   const config = await getConfig(input.evaluationTypeId);
   const hasRubric = !!((config?.rubric_prompt ?? "").trim());
   const hasInstructions = !!((config?.instructions ?? "").trim() || (config?.prompt ?? "").trim());
+  const hasBulkEvalData = !!(input.bulkEvaluationContext?.trim());
   const hasProjectData = !!(
-    input.projectElementsTable?.length || input.projectStructuredData?.files?.length
+    input.projectElementsTable?.length ||
+    input.projectStructuredData?.files?.length ||
+    hasBulkEvalData
   );
   const hasKnowledge =
     (await isKnowledgeConfigured(input.evaluationTypeId)) &&
@@ -263,9 +268,13 @@ export async function* runChatAgent(input: ChatAgentInput): AsyncGenerator<ChatS
   const baseInstruction =
     "Eres un asistente experto en evaluación de proyectos. Responde con claridad y basándote solo en el contexto proporcionado.\n\nREGLA OBLIGATORIA para objetivos: Si preguntan por el objetivo general o los objetivos específicos del proyecto, cita ÚNICAMENTE el texto de la sección del proyecto. No parafrasees.\n\nNo uses nunca las etiquetas <think> ni </think> en tus respuestas.";
   const rulesBlock = buildResponseRules(plan, hasRubric, rubricInContext);
+  const bulkBlock = input.bulkEvaluationContext?.trim()
+    ? `${input.bulkEvaluationContext.trim()}\n\n---\n\n`
+    : "";
   const systemMessage =
     (rulesBlock ? `REGLAS DE RESPUESTA:\n${rulesBlock}\n\n---\n\n` : "") +
     languageInstruction +
+    bulkBlock +
     (systemContent || baseInstruction);
 
   const messages: { role: "system" | "user" | "assistant"; content: string }[] = [

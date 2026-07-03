@@ -1,5 +1,7 @@
 import { getConfig } from "@/lib/db";
-import { loadChunks, saveChunks, type StoredChunk } from "@/lib/vector-store";
+import { clearKnowledgeVectorsBlob } from "@/lib/blob-chunk-store";
+import { loadChunksAsync, saveChunks, type StoredChunk } from "@/lib/vector-store";
+import { useBlobStorage } from "@/lib/blob-storage";
 
 export type KnowledgePathItem = string | { name: string; url: string };
 
@@ -28,7 +30,7 @@ export async function isKnowledgeConfigured(evaluationTypeId: number): Promise<b
  */
 export async function loadActiveChunks(evaluationTypeId: number): Promise<StoredChunk[]> {
   if (!(await isKnowledgeConfigured(evaluationTypeId))) return [];
-  return loadChunks(evaluationTypeId);
+  return loadChunksAsync(evaluationTypeId);
 }
 
 export async function hasActiveKnowledgeIndex(evaluationTypeId: number): Promise<boolean> {
@@ -36,14 +38,17 @@ export async function hasActiveKnowledgeIndex(evaluationTypeId: number): Promise
   return chunks.length > 0;
 }
 
-/** Borra índice en disco si ya no hay knowledge_paths (índice huérfano). */
+/** Borra índice en disco/blob si ya no hay knowledge_paths (índice huérfano). */
 export async function clearOrphanKnowledgeIndex(evaluationTypeId: number): Promise<boolean> {
   if (await isKnowledgeConfigured(evaluationTypeId)) return false;
-  const onDisk = loadChunks(evaluationTypeId);
-  if (onDisk.length === 0) return false;
-  saveChunks(evaluationTypeId, [], {
+  const existing = await loadChunksAsync(evaluationTypeId);
+  if (existing.length === 0) return false;
+  await saveChunks(evaluationTypeId, [], {
     indexedAt: new Date().toISOString(),
     knowledgeVersion: "empty",
   });
+  if (useBlobStorage()) {
+    await clearKnowledgeVectorsBlob(evaluationTypeId);
+  }
   return true;
 }

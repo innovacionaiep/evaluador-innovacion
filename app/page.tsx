@@ -1,17 +1,23 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import Header from "@/components/Header";
 import ChatPanel from "@/components/ChatPanel";
 import ReportPanel from "@/components/ReportPanel";
 import ConfigPanel from "@/components/ConfigPanel";
 import FullscreenOverlay, { ExpandIcon } from "@/components/FullscreenOverlay";
 import ProjectExtractedTable from "@/components/ProjectExtractedTable";
+import BulkResultsTable from "@/components/BulkResultsTable";
+import ResizableSplitPane from "@/components/ResizableSplitPane";
 import type { ChatMessage } from "@/components/ChatPanel";
 import type { ProjectStructuredData } from "@/lib/build-context";
+import type { EvaluationMode } from "@/lib/evaluation-mode";
 import { useEvaluationConfig } from "@/hooks/useEvaluationConfig";
 import { useProjectExtract } from "@/hooks/useProjectExtract";
+import { useBulkEvaluation } from "@/hooks/useBulkEvaluation";
 import { isIncompleteElement } from "@/lib/project-extract-validate";
+import { buildRubricScoreSchema } from "@/lib/evaluation-scores";
+import { exportBulkResultsExcel, exportBulkResultsZip } from "@/lib/bulk-export";
 
 type EvaluationType = { id: number; name: string };
 
@@ -43,16 +49,45 @@ function parseElementoContenido(text: string): [string, string][] {
 export default function Home() {
   const [evaluationTypes, setEvaluationTypes] = useState<EvaluationType[]>([]);
   const [activeTypeId, setActiveTypeId] = useState<number | null>(null);
+  const [evaluationMode, setEvaluationMode] = useState<EvaluationMode>("individual");
   const [configOpen, setConfigOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [reportContent, setReportContent] = useState("");
   const [reportTitle, setReportTitle] = useState("TITULO DEL INFORME DE EVALUACIÓN");
   const [projectFilePaths, setProjectFilePaths] = useState<string[]>([]);
+  const [projectFiles, setProjectFiles] = useState<File[]>([]);
+  const [bulkFiles, setBulkFiles] = useState<File[]>([]);
   const [projectSectionOpen, setProjectSectionOpen] = useState(true);
   const [fullscreenSection, setFullscreenSection] = useState<"project" | "report" | null>(null);
+  const [exportingExcel, setExportingExcel] = useState(false);
+  const [exportingZip, setExportingZip] = useState(false);
   const prevActiveTypeIdRef = useRef<number | null>(null);
+  const prevEvaluationModeRef = useRef<EvaluationMode>("individual");
 
-  const { elementsWithSection, knowledgeDocNames } = useEvaluationConfig(activeTypeId, configOpen);
+  const { elementsWithSection, knowledgeDocNames, rubricPrompt } = useEvaluationConfig(
+    activeTypeId,
+    configOpen
+  );
+
+  const scoreSchema = useMemo(
+    () => buildRubricScoreSchema(rubricPrompt),
+    [rubricPrompt]
+  );
+
+  const {
+    bulkRows,
+    bulkAgents,
+    bulkRunning,
+    runBulkEvaluation,
+    resetBulk,
+    cancelBulk,
+    initRowsFromFiles,
+  } = useBulkEvaluation(activeTypeId, setMessages);
+
+  const individualProjectFiles = useMemo(
+    () => (evaluationMode === "individual" ? projectFiles : []),
+    [evaluationMode, projectFiles]
+  );
 
   const {
     extractedProjectText,
@@ -61,20 +96,44 @@ export default function Home() {
     extractedStructuredData,
     extractedProjectLoading,
     resetExtract,
-  } = useProjectExtract(projectFilePaths, activeTypeId, SESSION_ID, knowledgeDocNames, setMessages);
+  } = useProjectExtract(
+    individualProjectFiles,
+    activeTypeId,
+    SESSION_ID,
+    knowledgeDocNames,
+    setMessages,
+    setProjectFilePaths
+  );
 
-  /** Al cambiar de tipo de evaluación, limpiar la UI principal (chat, informe, proyecto). */
+  const resetSessionState = useCallback(() => {
+    setMessages([]);
+    setReportContent("");
+    setProjectFilePaths([]);
+    setProjectFiles([]);
+    setBulkFiles([]);
+    resetExtract();
+    resetBulk();
+    setFullscreenSection(null);
+  }, [resetExtract, resetBulk]);
+
+  /** Al cambiar de tipo de evaluación, limpiar la UI principal. */
   useEffect(() => {
     if (activeTypeId == null) return;
     if (prevActiveTypeIdRef.current != null && prevActiveTypeIdRef.current !== activeTypeId) {
-      setMessages([]);
-      setReportContent("");
-      setProjectFilePaths([]);
-      resetExtract();
-      setFullscreenSection(null);
+      cancelBulk();
+      resetSessionState();
     }
     prevActiveTypeIdRef.current = activeTypeId;
-  }, [activeTypeId, resetExtract]);
+  }, [activeTypeId, cancelBulk, resetSessionState]);
+
+  /** Al cambiar de modo Individual/Masivo, limpiar estado. */
+  useEffect(() => {
+    if (prevEvaluationModeRef.current !== evaluationMode) {
+      cancelBulk();
+      resetSessionState();
+      prevEvaluationModeRef.current = evaluationMode;
+    }
+  }, [evaluationMode, cancelBulk, resetSessionState]);
 
   useEffect(() => {
     fetch("/api/evaluation-types")
@@ -126,18 +185,51 @@ export default function Home() {
           content: cont,
         }));
 
+  const activeTypeName = evaluationTypes.find((t) => t.id === activeTypeId)?.name ?? "";
+
+  const handleBulkFilesChange = (files: File[]) => {
+    setBulkFiles(files);
+    initRowsFromFiles(files);
+  };
+
+  const handleBulkEvaluate = () => {
+    if (bulkFiles.length === 0) return;
+    void runBulkEvaluation(bulkFiles);
+  };
+
+  const handleExportExcel = async () => {
+    setExportingExcel(true);
+    try {
+      await exportBulkResultsExcel(bulkRows, scoreSchema, activeTypeName);
+    } finally {
+      setExportingExcel(false);
+    }
+  };
+
+  const handleExportZip = async () => {
+    setExportingZip(true);
+    try {
+      await exportBulkResultsZip(bulkRows, reportTitle.replace(/^Informe:\s*/i, "Informe"));
+    } finally {
+      setExportingZip(false);
+    }
+  };
+
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-gray-100 dark:bg-[#1e1e1e]">
+    <div className="flex h-screen flex-col overflow-hidden bg-surface-base">
       <Header
         types={evaluationTypes}
         activeId={activeTypeId}
         onSelect={setActiveTypeId}
         onOpenConfig={() => setConfigOpen(true)}
+        evaluationMode={evaluationMode}
+        onEvaluationModeChange={setEvaluationMode}
       />
-      <div className="flex min-h-0 flex-1">
-        <div className="flex min-w-0 flex-1 flex-col border-r border-gray-200 dark:border-gray-700">
+      <ResizableSplitPane
+        defaultLeftPercent={45}
+        left={
           <ChatPanel
-            key={activeTypeId ?? "no-type"}
+            key={`${activeTypeId ?? "no-type"}-${evaluationMode}`}
             messages={messages}
             onMessagesChange={setMessages}
             reportContent={reportContent}
@@ -145,6 +237,8 @@ export default function Home() {
             activeTypeId={activeTypeId}
             projectFilePaths={projectFilePaths}
             onProjectFilePathsChange={setProjectFilePaths}
+            projectFiles={projectFiles}
+            onProjectFilesChange={setProjectFiles}
             projectElementsTable={extractedProjectTable}
             projectStructuredData={
               !extractedProjectTable.length && extractedStructuredData
@@ -153,58 +247,78 @@ export default function Home() {
             }
             sessionId={SESSION_ID}
             onProjectElementsTableChange={mergeProjectElementsFromChat}
+            evaluationMode={evaluationMode}
+            bulkFiles={bulkFiles}
+            onBulkFilesChange={handleBulkFilesChange}
+            bulkRunning={bulkRunning}
+            bulkAgents={bulkAgents}
+            bulkRows={bulkRows}
+            bulkScoreSchema={scoreSchema}
+            onBulkEvaluate={handleBulkEvaluate}
           />
-        </div>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex min-h-0 flex-1 flex-col">
-            <div
-              className={`flex flex-col border-b border-gray-200 dark:border-gray-700 ${projectSectionOpen ? "min-h-0 flex-1" : "shrink-0"}`}
-            >
-              <div className="flex shrink-0 w-full items-center gap-2 border-b border-gray-200 px-4 py-2 dark:border-gray-700">
-                <button
-                  type="button"
-                  onClick={() => setProjectSectionOpen((o) => !o)}
-                  className="flex min-w-0 flex-1 items-center gap-2 text-left text-lg font-semibold text-gray-900 hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-gray-300 dark:text-gray-100 dark:hover:bg-gray-800 dark:focus:ring-gray-600"
-                >
-                  <span className="text-gray-500 dark:text-gray-400" aria-hidden>
-                    {projectSectionOpen ? "▼" : "▶"}
-                  </span>
-                  Proyecto extraído
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFullscreenSection("project")}
-                  className="shrink-0 rounded p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
-                  title="Pantalla completa"
-                  aria-label="Ver en pantalla completa"
-                >
-                  <ExpandIcon />
-                </button>
-              </div>
-              {projectSectionOpen && (
-                <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 text-sm text-gray-800 dark:text-gray-200">
-                  {extractedProjectLoading ? (
-                    "Extrayendo con IA…"
-                  ) : (
-                    <ProjectExtractedTable
-                      rows={tableRows}
-                      elementsWithSection={elementsWithSection}
-                      extractedProjectText={extractedProjectText}
-                    />
-                  )}
+        }
+        right={
+          evaluationMode === "bulk" ? (
+            <BulkResultsTable
+              rows={bulkRows}
+              schema={scoreSchema}
+              evaluationTypeName={activeTypeName}
+              onExportExcel={() => void handleExportExcel()}
+              onExportZip={() => void handleExportZip()}
+              exportingExcel={exportingExcel}
+              exportingZip={exportingZip}
+            />
+          ) : (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div
+                className={`flex flex-col border-b border-border ${projectSectionOpen ? "min-h-0 flex-1" : "shrink-0"}`}
+              >
+                <div className="flex shrink-0 w-full items-center gap-2 border-b border-border px-4 py-2">
+                  <button
+                    type="button"
+                    onClick={() => setProjectSectionOpen((o) => !o)}
+                    className="flex min-w-0 flex-1 items-center gap-2 text-left text-lg font-semibold text-foreground hover:bg-surface-elevated focus:outline-none focus:ring-1 focus:ring-focus-ring"
+                  >
+                    <span className="text-foreground-muted" aria-hidden>
+                      {projectSectionOpen ? "▼" : "▶"}
+                    </span>
+                    Proyecto extraído
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFullscreenSection("project")}
+                    className="shrink-0 rounded p-2 text-foreground-muted hover:bg-surface-elevated hover:text-foreground focus:outline-none focus:ring-2 focus:ring-focus-ring"
+                    title="Pantalla completa"
+                    aria-label="Ver en pantalla completa"
+                  >
+                    <ExpandIcon />
+                  </button>
                 </div>
-              )}
+                {projectSectionOpen && (
+                  <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 text-sm text-foreground">
+                    {extractedProjectLoading ? (
+                      "Extrayendo con IA…"
+                    ) : (
+                      <ProjectExtractedTable
+                        rows={tableRows}
+                        elementsWithSection={elementsWithSection}
+                        extractedProjectText={extractedProjectText}
+                      />
+                    )}
+                  </div>
+                )}
+              </div>
+              <div className="min-h-0 flex-1 flex flex-col">
+                <ReportPanel
+                  title={reportTitle}
+                  body={reportContent}
+                  onFullscreenRequest={() => setFullscreenSection("report")}
+                />
+              </div>
             </div>
-            <div className="min-h-0 flex-1 flex flex-col">
-              <ReportPanel
-                title={reportTitle}
-                body={reportContent}
-                onFullscreenRequest={() => setFullscreenSection("report")}
-              />
-            </div>
-          </div>
-        </div>
-      </div>
+          )
+        }
+      />
       <ConfigPanel
         isOpen={configOpen}
         onClose={() => setConfigOpen(false)}
@@ -213,9 +327,9 @@ export default function Home() {
         onTypesChange={() => fetch("/api/evaluation-types").then((r) => r.json()).then(setEvaluationTypes)}
         onSelectType={setActiveTypeId}
       />
-      {fullscreenSection === "project" && (
+      {fullscreenSection === "project" && evaluationMode === "individual" && (
         <FullscreenOverlay title="Proyecto extraído" onClose={() => setFullscreenSection(null)}>
-          <div className="text-sm text-gray-800 dark:text-gray-200">
+          <div className="text-sm text-foreground">
             {extractedProjectLoading ? (
               "Extrayendo con IA…"
             ) : (
@@ -228,9 +342,9 @@ export default function Home() {
           </div>
         </FullscreenOverlay>
       )}
-      {fullscreenSection === "report" && (
+      {fullscreenSection === "report" && evaluationMode === "individual" && (
         <FullscreenOverlay title={reportTitle} onClose={() => setFullscreenSection(null)}>
-          <div className="text-gray-800 dark:text-gray-200" style={{ whiteSpace: "pre-wrap" }}>
+          <div className="text-foreground" style={{ whiteSpace: "pre-wrap" }}>
             {reportContent || "Cuerpo del informe de evaluación. Ejecute \"Evaluar\" para generar el informe."}
           </div>
         </FullscreenOverlay>

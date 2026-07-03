@@ -1,7 +1,13 @@
 import path from "path";
 import fs from "fs";
+import os from "os";
 
 const DATA_DIR = path.join(process.cwd(), "data");
+
+/** Serverless (Vercel): sesiones de proyecto en /tmp, no persistentes. */
+export function useEphemeralSessions(): boolean {
+  return !!process.env.VERCEL || !!process.env.BLOB_READ_WRITE_TOKEN?.trim();
+}
 
 export function getDataDir(): string {
   if (!fs.existsSync(DATA_DIR)) {
@@ -32,8 +38,16 @@ export function getRubricFilePath(evaluationTypeId: number, rubricPathFromConfig
   return path.join(dir, path.basename(rubricPathFromConfig));
 }
 
+function safeSessionId(sessionId: string): string {
+  return sessionId.replace(/[^a-zA-Z0-9._-]/g, "_") || "default";
+}
+
 export function getSessionDir(sessionId: string): string {
-  const dir = path.join(getDataDir(), "sessions", sessionId);
+  const safe = safeSessionId(sessionId);
+  const base = useEphemeralSessions()
+    ? path.join(os.tmpdir(), "evaluador-sessions")
+    : path.join(getDataDir(), "sessions");
+  const dir = path.join(base, safe);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -94,8 +108,7 @@ export function getVectorsDir(evaluationTypeId: number): string {
 
 /** Índice RAG de archivos del proyecto (por sesión, separado del Knowledge). */
 export function getProjectVectorsDir(sessionId: string): string {
-  const safe = sessionId.replace(/[^a-zA-Z0-9._-]/g, "_") || "default";
-  const dir = path.join(getSessionDir(safe), "vectors");
+  const dir = path.join(getSessionDir(sessionId), "vectors");
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }

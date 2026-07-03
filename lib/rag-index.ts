@@ -1,7 +1,7 @@
 import { getKnowledgePageSegments } from "@/lib/knowledge-loader";
 import { chunkText } from "@/lib/chunking";
 import { embedTexts } from "@/lib/embeddings";
-import { loadChunks, saveChunks, type StoredChunk } from "@/lib/vector-store";
+import { loadChunksAsync, saveChunks, type StoredChunk } from "@/lib/vector-store";
 import { detectPrintedPageInText } from "@/lib/page-lookup";
 
 const CHUNK_SIZE = 1000;
@@ -58,7 +58,7 @@ export async function indexKnowledge(
   const currentDocNames = [...new Set(segments.map((s) => s.docName))];
 
   if (segments.length === 0) {
-    saveChunks(evaluationTypeId, [], {
+    await saveChunks(evaluationTypeId, [], {
       indexedAt: new Date().toISOString(),
       knowledgeVersion: "empty",
     });
@@ -69,12 +69,12 @@ export async function indexKnowledge(
     ? new Set(options.reindexDocNames)
     : new Set(currentDocNames);
 
-  const existing = loadChunks(evaluationTypeId);
+  const existing = await loadChunksAsync(evaluationTypeId);
   const kept = existing.filter((c) => currentDocNames.includes(c.docName) && !reindexSet.has(c.docName));
 
   const segmentsToIndex = segments.filter((s) => reindexSet.has(s.docName));
   if (segmentsToIndex.length === 0 && kept.length > 0) {
-    saveChunks(evaluationTypeId, kept, {
+    await saveChunks(evaluationTypeId, kept, {
       indexedAt: new Date().toISOString(),
       knowledgeVersion: JSON.stringify(currentDocNames),
     });
@@ -84,7 +84,7 @@ export async function indexKnowledge(
   const { allChunks, texts } = segmentsToStoredChunks(segmentsToIndex);
   if (allChunks.length === 0) {
     const merged = kept;
-    saveChunks(evaluationTypeId, merged, {
+    await saveChunks(evaluationTypeId, merged, {
       indexedAt: new Date().toISOString(),
       knowledgeVersion: JSON.stringify(currentDocNames),
     });
@@ -95,7 +95,7 @@ export async function indexKnowledge(
   const newStored = mapChunksToStored(allChunks, embeddings);
   const stored = [...kept, ...newStored];
 
-  saveChunks(evaluationTypeId, stored, {
+  await saveChunks(evaluationTypeId, stored, {
     indexedAt: new Date().toISOString(),
     knowledgeVersion: JSON.stringify(currentDocNames),
   });

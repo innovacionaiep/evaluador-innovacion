@@ -23,12 +23,17 @@ export type ExtractedTableRow = {
   incomplete?: boolean;
 };
 
+function filesKey(files: File[]): string {
+  return files.map((f) => `${f.name}:${f.size}:${f.lastModified}`).join("|");
+}
+
 export function useProjectExtract(
-  projectFilePaths: string[],
+  projectFiles: File[],
   activeTypeId: number | null,
   sessionId: string,
   knowledgeDocNames: string[],
-  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>
+  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>,
+  onProjectFilePaths?: (paths: string[]) => void
 ) {
   const [extractedProjectText, setExtractedProjectText] = useState("");
   const [extractedProjectTable, setExtractedProjectTable] = useState<ExtractedTableRow[]>([]);
@@ -43,6 +48,7 @@ export function useProjectExtract(
   const extractTraceMsgIndexRef = useRef(-1);
   const extractFullTraceRef = useRef<AgentTraceEntry[]>([]);
   const evaluationTypeIdRef = useRef(activeTypeId);
+  const onPathsRef = useRef(onProjectFilePaths);
 
   useEffect(() => {
     knowledgeDocNamesRef.current = knowledgeDocNames;
@@ -53,7 +59,11 @@ export function useProjectExtract(
   }, [activeTypeId]);
 
   useEffect(() => {
-    if (projectFilePaths.length === 0) {
+    onPathsRef.current = onProjectFilePaths;
+  }, [onProjectFilePaths]);
+
+  useEffect(() => {
+    if (projectFiles.length === 0) {
       setExtractedProjectText("");
       setExtractedProjectTable([]);
       setExtractedStructuredData(null);
@@ -63,8 +73,11 @@ export function useProjectExtract(
 
     let cancelled = false;
     let currentController: AbortController | null = null;
+    const filesSnapshot = [...projectFiles];
 
-    const applyDonePayload = (event: Extract<ExtractStreamEvent, { type: "done" }>) => {
+    const applyDonePayload = (
+      event: Extract<ExtractStreamEvent, { type: "done" }> & { projectFilePaths?: string[] }
+    ) => {
       const text = typeof event.text === "string" ? event.text : "";
       const table = Array.isArray(event.elementsTable)
         ? event.elementsTable.map((r) => ({
@@ -79,6 +92,9 @@ export function useProjectExtract(
       setExtractedProjectTable(table);
       setExtractedStructuredData(sd && "files" in sd && sd.files?.length ? sd : null);
       setExtractedProjectLoading(false);
+      if (Array.isArray(event.projectFilePaths) && event.projectFilePaths.length > 0) {
+        onPathsRef.current?.(event.projectFilePaths);
+      }
     };
 
     const appendExtractCompletion = () => {
@@ -157,7 +173,7 @@ export function useProjectExtract(
     };
 
     const processExtractEvent = (
-      event: ExtractStreamEvent,
+      event: ExtractStreamEvent & { projectFilePaths?: string[] },
       streamState: ReturnType<typeof createExtractStreamState>,
       reveal: ReturnType<typeof createStaggeredTraceReveal>,
       live: boolean
@@ -182,16 +198,22 @@ export function useProjectExtract(
       const reveal = startExtractMessage();
       let streamState = createExtractStreamState();
       currentController = new AbortController();
+
+      const form = new FormData();
+      form.set("sessionId", sessionId);
+      if (evaluationTypeIdRef.current != null) {
+        form.set("evaluationTypeId", String(evaluationTypeIdRef.current));
+      }
+      form.set("stream", "true");
+      form.set("skipReindex", "false");
+      form.set("replace", "true");
+      for (const file of filesSnapshot) {
+        form.append("files", file);
+      }
+
       fetch("/api/project-extract", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectFilePaths,
-          evaluationTypeId: evaluationTypeIdRef.current ?? undefined,
-          sessionId,
-          stream: true,
-          skipReindex: true,
-        }),
+        body: form,
         signal: currentController.signal,
       })
         .then(async (res) => {
@@ -210,13 +232,17 @@ export function useProjectExtract(
             const lines = buffer.split("\n");
             buffer = lines.pop() ?? "";
             for (const line of lines) {
-              const event = parseExtractNdjsonLine(line);
+              const event = parseExtractNdjsonLine(line) as
+                | (ExtractStreamEvent & { projectFilePaths?: string[] })
+                | null;
               if (!event) continue;
               streamState = processExtractEvent(event, streamState, reveal, true);
             }
           }
           if (buffer.trim()) {
-            const event = parseExtractNdjsonLine(buffer);
+            const event = parseExtractNdjsonLine(buffer) as
+              | (ExtractStreamEvent & { projectFilePaths?: string[] })
+              | null;
             if (event) {
               streamState = processExtractEvent(event, streamState, reveal, false);
             }
@@ -290,7 +316,8 @@ export function useProjectExtract(
       currentController?.abort();
       extractRevealRef.current?.destroy();
     };
-  }, [projectFilePaths, sessionId, setMessages]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- filesKey establece identidad del lote
+  }, [filesKey(projectFiles), sessionId, setMessages]);
 
   const resetExtract = useCallback(() => {
     setExtractedProjectText("");

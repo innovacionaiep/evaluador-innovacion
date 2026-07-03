@@ -51,3 +51,13 @@ Aplicación tipo agente-chat que evalúa proyectos usando documentación y rúbr
 - **Chat**: clasifica preguntas (proyecto / rúbrica-config / manual) y usa la pregunta del usuario para buscar en el índice.
 - **Evaluación**: analiza cada dimensión de la rúbrica por separado con RAG dedicado y luego fusiona el informe.
 - Tras actualizar el indexador, pulse **Reindexar RAG** para regenerar fragmentos con metadatos de página.
+
+## Deploy (Vercel + Supabase + Blob)
+
+Guía completa en [docs/DEPLOY.md](docs/DEPLOY.md).
+
+Variables de ejemplo en [.env.example](.env.example). Migración de config local:
+
+```bash
+npm run migrate:config
+```

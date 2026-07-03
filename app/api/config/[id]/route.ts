@@ -7,6 +7,7 @@ import {
   knowledgeItemKey,
   type KnowledgePathItem,
 } from "@/lib/knowledge-cleanup";
+import { deleteRemovedBlobKnowledgeFiles } from "@/lib/blob-knowledge-cleanup";
 
 export const maxDuration = 300;
 
@@ -102,6 +103,7 @@ export async function PATCH(
       const removed = previous.filter((p) => !nextKeys.has(knowledgeItemKey(p)));
       const added = next.filter((p) => !prevKeys.has(knowledgeItemKey(p)));
       deleteRemovedLocalKnowledgeFiles(id, removed, next);
+      await deleteRemovedBlobKnowledgeFiles(removed);
 
       await updateConfig(id, {
         prompt,

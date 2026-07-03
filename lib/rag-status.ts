@@ -1,7 +1,7 @@
 import path from "path";
 import fs from "fs";
 import { getVectorsDir } from "@/lib/storage";
-import { loadChunks } from "@/lib/vector-store";
+import { loadChunksAsync, loadChunksMetaAsync } from "@/lib/vector-store";
 import {
   clearOrphanKnowledgeIndex,
   isKnowledgeConfigured,
@@ -27,18 +27,22 @@ export async function getRagStatus(evaluationTypeId: number): Promise<RagStatus>
   if (!knowledgeConfigured) {
     await clearOrphanKnowledgeIndex(evaluationTypeId);
   }
-  const chunks = knowledgeConfigured ? loadChunks(evaluationTypeId) : [];
+  const chunks = knowledgeConfigured ? await loadChunksAsync(evaluationTypeId) : [];
 
   let indexedAt: string | null = null;
   let knowledgeVersion: string | null = null;
-  if (fs.existsSync(metaPath)) {
+  const meta = knowledgeConfigured ? await loadChunksMetaAsync(evaluationTypeId) : null;
+  if (meta) {
+    indexedAt = meta.indexedAt ?? null;
+    knowledgeVersion = meta.knowledgeVersion ?? null;
+  } else if (fs.existsSync(metaPath)) {
     try {
-      const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8")) as {
+      const diskMeta = JSON.parse(fs.readFileSync(metaPath, "utf-8")) as {
         indexedAt?: string;
         knowledgeVersion?: string;
       };
-      indexedAt = meta.indexedAt ?? null;
-      knowledgeVersion = meta.knowledgeVersion ?? null;
+      indexedAt = diskMeta.indexedAt ?? null;
+      knowledgeVersion = diskMeta.knowledgeVersion ?? null;
     } catch {
       /* ignore */
     }
@@ -48,6 +52,8 @@ export async function getRagStatus(evaluationTypeId: number): Promise<RagStatus>
   try {
     if (fs.existsSync(chunksPath)) {
       chunksFileBytes = fs.statSync(chunksPath).size;
+    } else if (chunks.length > 0) {
+      chunksFileBytes = JSON.stringify(chunks).length;
     }
   } catch {
     /* ignore */

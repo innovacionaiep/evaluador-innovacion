@@ -42,13 +42,13 @@ export default function FullscreenOverlay({
       aria-modal="true"
       aria-label={title}
     >
-      <div className="flex h-full max-h-[90vh] w-full max-w-4xl flex-col rounded-lg border border-gray-300 bg-white shadow-xl dark:border-gray-600 dark:bg-[#1e1e1e]">
-        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-gray-200 px-4 py-3 dark:border-gray-700">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{title}</h2>
+      <div className="flex h-full max-h-[90vh] w-full max-w-4xl flex-col rounded-lg border border-border bg-surface-base shadow-xl">
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-3">
+          <h2 className="text-lg font-semibold text-foreground">{title}</h2>
           <button
             type="button"
             onClick={onClose}
-            className="rounded p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-500 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
+            className="rounded p-2 text-foreground-muted hover:bg-surface-elevated hover:text-foreground focus:outline-none focus:ring-2 focus:ring-focus-ring"
             aria-label="Cerrar pantalla completa"
           >
             <CloseIcon />

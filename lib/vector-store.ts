@@ -6,6 +6,12 @@ import {
   saveChunksToStore,
   type ChunkStoreConfig,
 } from "@/lib/chunk-store";
+import {
+  loadKnowledgeChunksFromBlob,
+  loadKnowledgeMetaFromBlob,
+  saveKnowledgeChunksToBlob,
+} from "@/lib/blob-chunk-store";
+import { useBlobStorage } from "@/lib/blob-storage";
 
 export type StoredChunk = {
   id: string;
@@ -36,20 +42,51 @@ function storeConfig(evaluationTypeId: number): ChunkStoreConfig {
   };
 }
 
-export function saveChunks(
-  evaluationTypeId: number,
-  chunks: StoredChunk[],
-  meta?: KnowledgeIndexMeta
-): void {
-  saveChunksToStore(storeConfig(evaluationTypeId), chunks, meta);
+function loadChunksFromDisk(evaluationTypeId: number): StoredChunk[] {
+  return loadChunksFromStore(storeConfig(evaluationTypeId));
 }
 
+/** Carga chunks: disco local y, si aplica, fallback a Vercel Blob. */
+export async function loadChunksAsync(evaluationTypeId: number): Promise<StoredChunk[]> {
+  const disk = loadChunksFromDisk(evaluationTypeId);
+  if (disk.length > 0) return disk;
+  if (!useBlobStorage()) return [];
+  const fromBlob = await loadKnowledgeChunksFromBlob(evaluationTypeId);
+  return fromBlob ?? [];
+}
+
+/** @deprecated Prefer loadChunksAsync en serverless. */
 export function loadChunks(evaluationTypeId: number): StoredChunk[] {
-  return loadChunksFromStore(storeConfig(evaluationTypeId));
+  return loadChunksFromDisk(evaluationTypeId);
+}
+
+export async function loadChunksMetaAsync(
+  evaluationTypeId: number
+): Promise<KnowledgeIndexMeta | null> {
+  const disk = loadMetaFromStore<KnowledgeIndexMeta>(storeConfig(evaluationTypeId));
+  if (disk) return disk;
+  if (!useBlobStorage()) return null;
+  return loadKnowledgeMetaFromBlob(evaluationTypeId);
 }
 
 export function loadChunksMeta(evaluationTypeId: number): KnowledgeIndexMeta | null {
   return loadMetaFromStore<KnowledgeIndexMeta>(storeConfig(evaluationTypeId));
+}
+
+export async function saveChunks(
+  evaluationTypeId: number,
+  chunks: StoredChunk[],
+  meta?: KnowledgeIndexMeta
+): Promise<void> {
+  saveChunksToStore(storeConfig(evaluationTypeId), chunks, meta);
+  if (useBlobStorage()) {
+    await saveKnowledgeChunksToBlob(evaluationTypeId, chunks, meta);
+  }
+}
+
+export async function hasChunksAsync(evaluationTypeId: number): Promise<boolean> {
+  const chunks = await loadChunksAsync(evaluationTypeId);
+  return chunks.length > 0;
 }
 
 export function hasChunks(evaluationTypeId: number): boolean {

@@ -403,11 +403,27 @@ export default function ConfigPanel({
   const sectionClass =
     "rounded-lg border border-gray-200 bg-gray-50/80 p-4 dark:border-gray-600 dark:bg-gray-800/60";
   const sectionTitleClass = "text-sm font-semibold text-gray-800 dark:text-gray-200";
+  const inputClass =
+    "rounded border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100";
+  const btnPrimaryClass =
+    "rounded bg-gray-600 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 dark:bg-gray-500 dark:hover:bg-gray-600 disabled:opacity-50";
+  const btnSecondaryClass =
+    "rounded border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700";
+  const uploadZoneClass =
+    "flex min-w-0 flex-1 items-center justify-center gap-2 rounded-lg border-2 border-dashed border-gray-300 bg-white py-3 text-sm font-medium text-gray-700 transition hover:border-gray-400 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500 dark:hover:bg-gray-700";
+  const listPanelClass =
+    "mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto rounded bg-gray-100 px-2 py-2 text-xs text-gray-600 dark:bg-gray-700 dark:text-gray-300";
+  const modalShellClass =
+    "flex h-[90vh] w-full max-w-[95vw] flex-col rounded-lg border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-[#252526]";
+  const modalSubShellClass =
+    "flex h-full max-h-[90vh] w-full max-w-4xl flex-col rounded-lg border border-gray-300 bg-white shadow-xl dark:border-gray-600 dark:bg-[#1e1e1e]";
+  const iconBtnClass =
+    "shrink-0 rounded p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
       <div
-        className="flex h-[90vh] w-full max-w-[95vw] flex-col rounded-lg border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-[#252526]"
+        className={modalShellClass}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between border-b border-gray-200 px-6 py-4 dark:border-gray-600">
@@ -425,7 +441,7 @@ export default function ConfigPanel({
                 type="button"
                 onClick={handleSaveConfig}
                 disabled={saving}
-                className="rounded bg-gray-600 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 dark:bg-gray-500 dark:hover:bg-gray-600 disabled:opacity-50"
+                className={btnPrimaryClass}
               >
                 Guardar
               </button>
@@ -453,13 +469,13 @@ export default function ConfigPanel({
                 value={newTypeName}
                 onChange={(e) => setNewTypeName(e.target.value)}
                 placeholder="Nombre del tipo (ej. IGIP, TRL)"
-                className="flex-1 rounded border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+                className={`flex-1 ${inputClass}`}
               />
               <button
                 type="button"
                 onClick={handleCreateType}
                 disabled={saving || !newTypeName.trim()}
-                className="rounded bg-[#4b5563] px-4 py-2 text-sm font-medium text-white hover:bg-[#374151] dark:bg-[#6b7280] dark:hover:bg-[#4b5563] disabled:opacity-50"
+                className={btnPrimaryClass}
               >
                 Crear
               </button>
@@ -514,7 +530,7 @@ export default function ConfigPanel({
                   type="button"
                   onClick={() => knowledgeInputRef.current?.click()}
                   disabled={indexingKnowledge}
-                  className="flex min-w-0 flex-1 items-center justify-center gap-2 rounded-lg border-2 border-dashed border-gray-300 bg-white py-3 text-sm font-medium text-gray-700 transition hover:border-gray-400 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500 dark:hover:bg-gray-700"
+                  className={uploadZoneClass}
                 >
                   <svg className="h-5 w-5 shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
@@ -526,7 +542,7 @@ export default function ConfigPanel({
                     type="button"
                     onClick={handleReindexKnowledge}
                     disabled={indexingKnowledge}
-                    className="shrink-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                    className={`shrink-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700`}
                   >
                     Reindexar RAG
                   </button>
@@ -552,7 +568,7 @@ export default function ConfigPanel({
                 </p>
               )}
               {config.knowledge_paths.length > 0 && (
-                <ul className="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto rounded bg-gray-100 px-2 py-2 text-xs text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                <ul className={listPanelClass}>
                   <span className="font-medium">Archivos cargados:</span>
                   {config.knowledge_paths.map((p, i) => (
                     <li key={i} className="flex items-center justify-between gap-2 pl-1">
@@ -594,7 +610,7 @@ export default function ConfigPanel({
                 <button
                   type="button"
                   onClick={() => setExpandSection("elements")}
-                  className="shrink-0 rounded p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                  className={iconBtnClass}
                   title="Ampliar en ventana nueva"
                   aria-label="Ampliar sección"
                 >
@@ -620,7 +636,7 @@ export default function ConfigPanel({
                         className={`rounded-lg border-2 ${colors.border} ${colors.bg} p-2.5`}
                       >
                         <div className="mb-2 flex items-center justify-between gap-2">
-                          <span className="text-xs font-semibold uppercase tracking-wide text-gray-700 dark:text-gray-300">
+                          <span className="text-xs font-semibold uppercase tracking-wide text-gray-600 dark:text-gray-400">
                             {secName}
                           </span>
                           <div className="flex items-center gap-0.5">
@@ -699,7 +715,7 @@ export default function ConfigPanel({
                                 <button
                                   type="button"
                                   onClick={() => openEditElementModal(index)}
-                                  className="shrink-0 rounded p-0.5 text-gray-500 hover:bg-black/10 hover:text-gray-700 dark:hover:text-gray-300"
+                                  className="shrink-0 rounded p-0.5 text-gray-500 hover:bg-black/10 hover:text-gray-700 disabled:opacity-30 dark:hover:text-gray-300"
                                   title="Editar"
                                 >
                                   <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -728,7 +744,7 @@ export default function ConfigPanel({
               <button
                 type="button"
                 onClick={openAddElementModal}
-                className="mt-2 shrink-0 rounded border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
+                className="mt-2 shrink-0 rounded border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
               >
                 Añadir elemento
               </button>
@@ -749,7 +765,7 @@ export default function ConfigPanel({
                 <button
                   type="button"
                   onClick={() => setExpandSection("rubric")}
-                  className="shrink-0 rounded p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                  className={iconBtnClass}
                   title="Ampliar en ventana nueva"
                   aria-label="Ampliar sección"
                 >
@@ -760,7 +776,7 @@ export default function ConfigPanel({
                 value={config.rubric_prompt}
                 onChange={(e) => setConfig((c) => ({ ...c, rubric_prompt: e.target.value }))}
                 rows={6}
-                className="mt-3 min-h-0 flex-1 resize-none rounded border border-gray-300 px-3 py-2 font-mono text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+                className={`mt-3 min-h-0 flex-1 resize-none ${inputClass} font-mono`}
                 placeholder="Describa la rúbrica: dimensiones, subcriterios, niveles (1-4), porcentajes..."
               />
             </section>
@@ -780,7 +796,7 @@ export default function ConfigPanel({
                 <button
                   type="button"
                   onClick={() => setExpandSection("instructions")}
-                  className="shrink-0 rounded p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                  className={iconBtnClass}
                   title="Ampliar en ventana nueva"
                   aria-label="Ampliar sección"
                 >
@@ -791,7 +807,7 @@ export default function ConfigPanel({
                 value={config.instructions}
                 onChange={(e) => setConfig((c) => ({ ...c, instructions: e.target.value }))}
                 rows={6}
-                className="mt-3 min-h-0 flex-1 resize-none rounded border border-gray-300 px-3 py-2 font-mono text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+                className={`mt-3 min-h-0 flex-1 resize-none ${inputClass} font-mono`}
                 placeholder="Ej.: Evalúa el proyecto usando el manual de Oslo y la rúbrica. Basa las notas en los elementos identificados..."
               />
             </section>
@@ -811,7 +827,7 @@ export default function ConfigPanel({
                 <button
                   type="button"
                   onClick={() => setExpandSection("reportFormat")}
-                  className="shrink-0 rounded p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                  className={iconBtnClass}
                   title="Ampliar en ventana nueva"
                   aria-label="Ampliar sección"
                 >
@@ -822,7 +838,7 @@ export default function ConfigPanel({
                 value={config.report_format}
                 onChange={(e) => setConfig((c) => ({ ...c, report_format: e.target.value }))}
                 rows={6}
-                className="mt-3 min-h-0 flex-1 resize-none rounded border border-gray-300 px-3 py-2 font-mono text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+                className={`mt-3 min-h-0 flex-1 resize-none ${inputClass} font-mono`}
                 placeholder="Ej.: Incluye: 1. Resumen, 2. Notas por dimensión, 3. Justificación por criterio, 4. Recomendaciones..."
               />
             </section>
@@ -833,7 +849,7 @@ export default function ConfigPanel({
 
         {expandSection === "elements" && (
           <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Elementos a identificar - ampliado" onClick={() => setExpandSection(null)}>
-            <div className="flex h-full max-h-[90vh] w-full max-w-4xl flex-col rounded-lg border border-gray-300 bg-white shadow-xl dark:border-gray-600 dark:bg-[#1e1e1e]" onClick={(e) => e.stopPropagation()}>
+            <div className={modalSubShellClass} onClick={(e) => e.stopPropagation()}>
               <div className="flex shrink-0 items-center justify-between gap-2 border-b border-gray-200 px-4 py-3 dark:border-gray-700">
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">3. Elementos a identificar</h2>
                 <button type="button" onClick={() => setExpandSection(null)} className="rounded p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700" aria-label="Cerrar">✕</button>
@@ -849,13 +865,13 @@ export default function ConfigPanel({
                     });
                     const sectionEntries = Array.from(bySection.entries());
                     return sectionEntries.length === 0 ? (
-                      <p className="text-gray-500 dark:text-gray-400">No hay elementos definidos. Añádalos en la sección de configuración.</p>
+                      <p className="text-gray-600 dark:text-gray-400">No hay elementos definidos. Añádalos en la sección de configuración.</p>
                     ) : (
                       sectionEntries.map(([secName, items]) => {
                         const colors = getSectionColor(secName);
                         return (
                           <div key={secName} className={`rounded-lg border-2 ${colors.border} ${colors.bg} p-3`}>
-                            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-700 dark:text-gray-300">{secName}</div>
+                            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-600 dark:text-gray-400">{secName}</div>
                             <ul className="space-y-2">
                               {items.map((el, i) => (
                                 <li key={i} className={`rounded border ${colors.card} px-3 py-2`}>
@@ -876,7 +892,7 @@ export default function ConfigPanel({
         )}
         {expandSection === "rubric" && (
           <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Rúbrica - ampliado" onClick={() => setExpandSection(null)}>
-            <div className="flex h-full max-h-[90vh] w-full max-w-4xl flex-col rounded-lg border border-gray-300 bg-white shadow-xl dark:border-gray-600 dark:bg-[#1e1e1e]" onClick={(e) => e.stopPropagation()}>
+            <div className={modalSubShellClass} onClick={(e) => e.stopPropagation()}>
               <div className="flex shrink-0 items-center justify-between gap-2 border-b border-gray-200 px-4 py-3 dark:border-gray-700">
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">4. Rúbrica</h2>
                 <button type="button" onClick={() => setExpandSection(null)} className="rounded p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700" aria-label="Cerrar">✕</button>
@@ -885,7 +901,7 @@ export default function ConfigPanel({
                 <textarea
                   value={config.rubric_prompt}
                   onChange={(e) => setConfig((c) => ({ ...c, rubric_prompt: e.target.value }))}
-                  className="h-full min-h-[300px] w-full resize-none rounded border border-gray-300 px-3 py-2 font-mono text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+                  className={`h-full min-h-[300px] w-full resize-none font-mono ${inputClass}`}
                   placeholder="Describa la rúbrica: dimensiones, subcriterios, niveles (1-4), porcentajes..."
                 />
               </div>
@@ -894,7 +910,7 @@ export default function ConfigPanel({
         )}
         {expandSection === "instructions" && (
           <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Instrucciones - ampliado" onClick={() => setExpandSection(null)}>
-            <div className="flex h-full max-h-[90vh] w-full max-w-4xl flex-col rounded-lg border border-gray-300 bg-white shadow-xl dark:border-gray-600 dark:bg-[#1e1e1e]" onClick={(e) => e.stopPropagation()}>
+            <div className={modalSubShellClass} onClick={(e) => e.stopPropagation()}>
               <div className="flex shrink-0 items-center justify-between gap-2 border-b border-gray-200 px-4 py-3 dark:border-gray-700">
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">5. Instrucciones</h2>
                 <button type="button" onClick={() => setExpandSection(null)} className="rounded p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700" aria-label="Cerrar">✕</button>
@@ -903,7 +919,7 @@ export default function ConfigPanel({
                 <textarea
                   value={config.instructions}
                   onChange={(e) => setConfig((c) => ({ ...c, instructions: e.target.value }))}
-                  className="h-full min-h-[300px] w-full resize-none rounded border border-gray-300 px-3 py-2 font-mono text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+                  className={`h-full min-h-[300px] w-full resize-none font-mono ${inputClass}`}
                   placeholder="Ej.: Evalúa el proyecto usando el manual de Oslo y la rúbrica..."
                 />
               </div>
@@ -912,7 +928,7 @@ export default function ConfigPanel({
         )}
         {expandSection === "reportFormat" && (
           <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Formato de informe - ampliado" onClick={() => setExpandSection(null)}>
-            <div className="flex h-full max-h-[90vh] w-full max-w-4xl flex-col rounded-lg border border-gray-300 bg-white shadow-xl dark:border-gray-600 dark:bg-[#1e1e1e]" onClick={(e) => e.stopPropagation()}>
+            <div className={modalSubShellClass} onClick={(e) => e.stopPropagation()}>
               <div className="flex shrink-0 items-center justify-between gap-2 border-b border-gray-200 px-4 py-3 dark:border-gray-700">
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">6. Formato de informe</h2>
                 <button type="button" onClick={() => setExpandSection(null)} className="rounded p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700" aria-label="Cerrar">✕</button>
@@ -921,7 +937,7 @@ export default function ConfigPanel({
                 <textarea
                   value={config.report_format}
                   onChange={(e) => setConfig((c) => ({ ...c, report_format: e.target.value }))}
-                  className="h-full min-h-[300px] w-full resize-none rounded border border-gray-300 px-3 py-2 font-mono text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+                  className={`h-full min-h-[300px] w-full resize-none font-mono ${inputClass}`}
                   placeholder="Ej.: Incluye: 1. Resumen, 2. Notas por dimensión..."
                 />
               </div>
@@ -949,7 +965,7 @@ export default function ConfigPanel({
                     value={elementForm.title}
                     onChange={(e) => setElementForm((f) => ({ ...f, title: e.target.value }))}
                     placeholder="Ej. Nombre del proyecto"
-                    className="w-full rounded border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+                    className={`w-full ${inputClass}`}
                   />
                 </div>
                 <div>
@@ -959,7 +975,7 @@ export default function ConfigPanel({
                     onChange={(e) => setElementForm((f) => ({ ...f, description: e.target.value }))}
                     placeholder="Ej. nombre o título principal, suele ser la letra más grande"
                     rows={2}
-                    className="w-full resize-none rounded border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+                    className={`w-full resize-none ${inputClass}`}
                   />
                 </div>
                 <div>
@@ -975,7 +991,7 @@ export default function ConfigPanel({
                             const v = e.target.value;
                             setElementForm((f) => ({ ...f, section: v === "__new__" ? "" : v }));
                           }}
-                          className="w-full rounded border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+                          className={`w-full ${inputClass}`}
                         >
                           {sectionOptions.map((s) => (
                             <option key={s} value={s}>{s}</option>
@@ -988,13 +1004,13 @@ export default function ConfigPanel({
                             value={elementForm.section}
                             onChange={(e) => setElementForm((f) => ({ ...f, section: e.target.value }))}
                             placeholder="Nombre de la nueva sección (ej. Información General, Presupuesto)"
-                            className="mt-2 w-full rounded border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+                            className={`mt-2 w-full ${inputClass}`}
                             autoFocus
                           />
                         )}
                         {existingSections.length > 0 && (
                           <div className="mt-2">
-                            <span className="text-xs text-gray-500 dark:text-gray-400">Eliminar sección de la lista: </span>
+                            <span className="text-xs text-gray-600 dark:text-gray-400">Eliminar sección de la lista: </span>
                             <div className="mt-1 flex flex-wrap gap-1.5">
                               {existingSections.sort((a, b) => (a === "General" ? -1 : a.localeCompare(b))).map((s) => (
                                 <span
@@ -1034,7 +1050,7 @@ export default function ConfigPanel({
                   type="button"
                   onClick={saveElementFromModal}
                   disabled={!elementForm.title.trim()}
-                  className="rounded bg-gray-600 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 dark:bg-gray-500 dark:hover:bg-gray-600 disabled:opacity-50"
+                  className={btnPrimaryClass}
                 >
                   {editingElementIndex !== null ? "Guardar" : "Añadir"}
                 </button>

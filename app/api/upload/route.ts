@@ -3,17 +3,15 @@ import path from "path";
 import fs from "fs";
 import { put as blobPut } from "@vercel/blob";
 import {
-  clearSessionProjectFiles,
   getKnowledgeDir,
   getRubricPath,
-  getSessionDir,
   listSessionProjectFilePaths,
 } from "@/lib/storage";
-import { clearProjectIndex } from "@/lib/project-vector-store";
 import { getConfig, updateConfig } from "@/lib/db";
 import { getSupportedExtensions, getProjectUploadExtensions } from "@/lib/document-parser";
 import { indexKnowledge } from "@/lib/rag-index";
 import { ingestProjectFiles } from "@/lib/project-ingest";
+import { saveProjectBuffersToSession } from "@/lib/session-project-files";
 
 export const maxDuration = 300;
 
@@ -143,29 +141,26 @@ export async function POST(request: Request) {
 
     if (kind === "project") {
       const sessionId = (formData.get("sessionId") as string) || "default";
-      const dir = getSessionDir(sessionId);
       const files = formData.getAll("files") as File[];
       const projectAllowed = new Set(getProjectUploadExtensions());
       const replaceExisting = formData.get("replace") !== "false";
-      if (replaceExisting) {
-        clearSessionProjectFiles(sessionId, [...projectAllowed]);
-        clearProjectIndex(sessionId);
-      }
-      const saved: { name: string; path: string }[] = [];
+      const buffers: { name: string; buffer: Buffer }[] = [];
       for (const file of files) {
         if (!file?.name) continue;
         const ext = path.extname(file.name).toLowerCase();
         if (!projectAllowed.has(ext)) continue;
-        const filename = sanitizeFilename(file.name);
-        const filepath = path.join(dir, filename);
-        const buf = Buffer.from(await file.arrayBuffer());
-        fs.writeFileSync(filepath, buf);
-        saved.push({ name: filename, path: filepath });
+        buffers.push({
+          name: file.name,
+          buffer: Buffer.from(await file.arrayBuffer()),
+        });
       }
+      const allSessionPaths =
+        buffers.length > 0
+          ? saveProjectBuffersToSession(sessionId, buffers, { replace: replaceExisting })
+          : listSessionProjectFilePaths(sessionId, [...projectAllowed]);
       let projectChunkCount: number | undefined;
       let structuredIndexed: boolean | undefined;
       let projectIndexError: string | undefined;
-      const allSessionPaths = listSessionProjectFilePaths(sessionId, [...projectAllowed]);
       if (allSessionPaths.length > 0) {
         try {
           const result = await ingestProjectFiles(sessionId, allSessionPaths);
@@ -176,8 +171,8 @@ export async function POST(request: Request) {
         }
       }
       return NextResponse.json({
-        saved: saved.map((s) => s.name),
-        paths: allSessionPaths.length > 0 ? allSessionPaths : saved.map((s) => s.path),
+        saved: allSessionPaths.map((p) => path.basename(p)),
+        paths: allSessionPaths,
         projectChunkCount,
         structuredIndexed,
         projectIndexError,

@@ -1,7 +1,7 @@
 import type { ExcelSheet, ExcelStructuredData, ExcelMerge } from "@/lib/excel-structured-extract";
 import type { ElementDef } from "@/lib/excel-heuristics";
 import { fuzzyMatchScore, normalizeForMatch } from "@/lib/text-match";
-import { joinUniqueParts } from "@/lib/extract-content-clean";
+import { joinUniqueParts, splitContinuityFromInnovatorTail } from "@/lib/extract-content-clean";
 import {
   isAcceptableExtractedContent,
   isFocalizacionKeywordList,
@@ -16,6 +16,8 @@ const VALUE_MIN_COL = 2;
 
 const CONTINUITY_LABEL_RE =
   /continuidad.*fase\s+anterior|fase\s+anterior.*continuidad|es\s+continuidad\s+de/i;
+const FACTOR_INNOVADOR_LABEL_RE =
+  /factor\s+innovador|innovador\s+del\s+proyecto|diferenciaci[oó]n.*propuesta\s+de\s+valor/i;
 const PERTINENCIA_COMBINED_LABEL_RE =
   /pertinencia\s+local.*disciplinar|pertinencia\s+local\s+y\s+disciplinar|local\s+y\s+disciplinar/i;
 const PERTINENCIA_LOCAL_INLINE_RE = /pertinencia\s+local\s*:?\s*/i;
@@ -45,6 +47,11 @@ const FORM_ROW_TITLE_PATTERNS = [
 export function isContinuityElement(element: ElementLike): boolean {
   const t = normalizeForMatch(element.title);
   return t.includes("continuidad") && t.includes("fase");
+}
+
+export function isFactorInnovadorElement(element: ElementLike): boolean {
+  const t = normalizeForMatch(element.title);
+  return /factor\s+innovador|innovador\s+del\s+proyecto/.test(t);
 }
 
 export function isPertinenciaLocalElement(element: ElementLike): boolean {
@@ -211,8 +218,13 @@ function scoreLabelMatch(label: string, element: ElementLike): number {
     return 0.88;
   }
 
-  if (/factor innovador|innovador del proyecto/i.test(titleNorm) && /innovador/i.test(labelNorm)) {
-    return 0.88;
+  if (/factor innovador|innovador del proyecto/i.test(titleNorm)) {
+    if (CONTINUITY_LABEL_RE.test(labelNorm)) return 0;
+    if (FACTOR_INNOVADOR_LABEL_RE.test(labelNorm)) return 0.95;
+    if (/innovador/i.test(labelNorm) && !/continuidad|fase\s+anterior/.test(labelNorm)) {
+      return 0.55;
+    }
+    return 0;
   }
 
   if (labelNorm.includes(titleNorm)) return 0.95;
@@ -395,6 +407,11 @@ function extractFromSheet(sheet: ExcelSheet, element: ElementLike): string {
     if (looksLikeFormQuestionContent(rowValue)) continue;
 
     if (isContinuityElement(element) && CONTINUITY_LABEL_RE.test(labelNorm)) {
+      return splitContinuityFromInnovatorTail(toAnswerOnly(rowValue, labelCell.value));
+    }
+
+    if (isFactorInnovadorElement(element) && FACTOR_INNOVADOR_LABEL_RE.test(labelNorm)) {
+      if (CONTINUITY_LABEL_RE.test(labelNorm)) continue;
       return toAnswerOnly(rowValue, labelCell.value);
     }
 

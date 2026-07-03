@@ -293,7 +293,7 @@ export async function buildSystemContext(
       phase: "rag",
       message: `Buscando contenido de la página ${targetPage} en el manual indexado…`,
     });
-    const pageChunks = retrieveChunksForPrintedPage(
+    const pageChunks = await retrieveChunksForPrintedPage(
       evaluationTypeId,
       targetPage,
       limits.maxRetrievedChars

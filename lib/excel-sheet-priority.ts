@@ -45,6 +45,9 @@ export function isGanttColumnHeaderLabel(label: string): boolean {
 }
 
 export function isLikelyGanttHeaderRowContent(content: string): boolean {
+  const numbered = (content.match(/^\s*\d+[\.\)]\s/mg) ?? []).length;
+  if (numbered >= 2) return false;
+
   const lines = content
     .split(/\r?\n/)
     .map((l) => l.trim())
