@@ -29,25 +29,7 @@ export const LLM_USE_CASE_DEFAULTS: Record<LlmUseCase, string> = {
   embeddings: "openai/text-embedding-3-small",
 };
 
-export type LlmConfig = {
-  apiKey: string;
-  models: Record<LlmUseCase, string>;
-};
-
-export function maskApiKey(key: string): string {
-  const trimmed = key.trim();
-  if (!trimmed) return "";
-  if (trimmed.length <= 12) return "••••••••••••";
-  return `${trimmed.slice(0, 10)}••••${trimmed.slice(-4)}`;
-}
-
-export function isMaskedKeyValue(input: string): boolean {
-  return input.includes("••••");
-}
-
 export type LlmConfigPublic = {
-  apiKey: string;
   models: Record<LlmUseCase, string>;
-  hasApiKey: boolean;
-  usesEnvFallback: boolean;
+  hasOpenRouterApiKey: boolean;
 };

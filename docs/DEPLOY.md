@@ -30,7 +30,7 @@ Si la contraseña contiene `&`, codifícala como `%26` en la URL (ej. `&WC&…` 
 | `OPENROUTER_API_KEY` | Sí |
 | `NEXT_PUBLIC_APP_URL` | Recomendada |
 
-En producción no uses `data/llm-config.json`; configura OpenRouter solo por variables de entorno.
+La API key de OpenRouter solo se configura con `OPENROUTER_API_KEY`. Los modelos por función se guardan desde la UI «Configurar LLM» en la base de datos (Supabase/SQLite).
 
 ## Plan Vercel
 

@@ -31,6 +31,10 @@ function runSqliteMigrations(db: DatabaseSync): void {
       rubric_prompt TEXT DEFAULT '',
       FOREIGN KEY (evaluation_type_id) REFERENCES evaluation_types(id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
   const alterColumns = [
     "ALTER TABLE evaluation_type_config ADD COLUMN elements TEXT DEFAULT '[]'",
@@ -205,6 +209,41 @@ export async function updateConfig(evaluationTypeId: number, data: ConfigUpdateD
       "UPDATE evaluation_type_config SET prompt = ?, knowledge_paths = ?, rubric_path = ?, elements = ?, instructions = ?, report_format = ?, rubric_prompt = ? WHERE evaluation_type_id = ?"
     )
     .run(prompt, knowledge_paths, rubric_path, elements, instructions, report_format, rubric_prompt, evaluationTypeId);
+}
+
+const LLM_MODELS_KEY = "llm_models";
+
+export async function getLlmModels(): Promise<Record<string, string> | null> {
+  if (usePostgres()) {
+    return pg.getLlmModelsPostgres();
+  }
+  const db = getDb();
+  const row = db.prepare("SELECT value FROM app_settings WHERE key = ?").get(LLM_MODELS_KEY) as
+    | { value: string }
+    | undefined;
+  if (!row?.value) return null;
+  try {
+    const parsed = JSON.parse(row.value) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === "string" && v.trim()) out[k] = v.trim();
+    }
+    return Object.keys(out).length > 0 ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveLlmModels(models: Record<string, string>): Promise<void> {
+  if (usePostgres()) {
+    await pg.saveLlmModelsPostgres(models);
+    return;
+  }
+  const db = getDb();
+  db.prepare(
+    "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+  ).run(LLM_MODELS_KEY, JSON.stringify(models));
 }
 
 export { getDb };

@@ -18,10 +18,8 @@ const USE_CASE_ORDER: LlmUseCase[] = [
 ];
 
 type LlmConfigResponse = {
-  apiKey: string;
   models: Record<LlmUseCase, string>;
-  hasApiKey: boolean;
-  usesEnvFallback: boolean;
+  hasOpenRouterApiKey: boolean;
 };
 
 export default function LlmConfigModal({
@@ -31,12 +29,10 @@ export default function LlmConfigModal({
   isOpen: boolean;
   onClose: () => void;
 }) {
-  const [apiKey, setApiKey] = useState("");
   const [models, setModels] = useState<Record<LlmUseCase, string>>({
     ...LLM_USE_CASE_DEFAULTS,
   });
-  const [hasApiKey, setHasApiKey] = useState(false);
-  const [usesEnvFallback, setUsesEnvFallback] = useState(false);
+  const [hasOpenRouterApiKey, setHasOpenRouterApiKey] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -48,10 +44,8 @@ export default function LlmConfigModal({
     fetch("/api/llm-config")
       .then((r) => r.json())
       .then((data: LlmConfigResponse) => {
-        if (typeof data.apiKey === "string") setApiKey(data.apiKey);
         if (data.models) setModels({ ...LLM_USE_CASE_DEFAULTS, ...data.models });
-        setHasApiKey(!!data.hasApiKey);
-        setUsesEnvFallback(!!data.usesEnvFallback);
+        setHasOpenRouterApiKey(!!data.hasOpenRouterApiKey);
       })
       .catch(() => setMessage("No se pudo cargar la configuración LLM."))
       .finally(() => setLoading(false));
@@ -64,14 +58,12 @@ export default function LlmConfigModal({
       const res = await fetch("/api/llm-config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey, models }),
+        body: JSON.stringify({ models }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Error al guardar");
-      if (typeof data.apiKey === "string") setApiKey(data.apiKey);
       if (data.models) setModels({ ...LLM_USE_CASE_DEFAULTS, ...data.models });
-      setHasApiKey(!!data.hasApiKey);
-      setUsesEnvFallback(!!data.usesEnvFallback);
+      setHasOpenRouterApiKey(!!data.hasOpenRouterApiKey);
       setMessage("Configuración LLM guardada.");
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Error al guardar");
@@ -117,30 +109,21 @@ export default function LlmConfigModal({
                   API key de OpenRouter
                 </h3>
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Clave de tu cuenta OpenRouter con crédito. Si no hay ninguna aquí, se usa{" "}
-                  <code className="text-[11px]">OPENROUTER_API_KEY</code> del entorno.
+                  Se configura únicamente con la variable de entorno{" "}
+                  <code className="text-[11px]">OPENROUTER_API_KEY</code> (en{" "}
+                  <code className="text-[11px]">.env.local</code> en local o en Vercel en
+                  producción).
                 </p>
-                {usesEnvFallback && (
-                  <p className="mt-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-900/30 dark:text-amber-200">
-                    Actualmente solo hay clave en <code>.env.local</code>. Guárdela aquí para
-                    centralizar la configuración.
-                  </p>
-                )}
-                {hasApiKey && !usesEnvFallback && (
+                {hasOpenRouterApiKey ? (
                   <p className="mt-2 text-xs text-green-700 dark:text-green-400">
-                    API key configurada.
+                    API key detectada en el entorno.
+                  </p>
+                ) : (
+                  <p className="mt-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-900/30 dark:text-amber-200">
+                    No se detectó <code>OPENROUTER_API_KEY</code>. Añádala al entorno antes de
+                    usar el evaluador.
                   </p>
                 )}
-                <div className="mt-3">
-                  <input
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="sk-or-v1-…"
-                    className={inputClass}
-                    autoComplete="off"
-                  />
-                </div>
               </section>
 
               <section>
@@ -150,7 +133,8 @@ export default function LlmConfigModal({
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                   ID de modelo en OpenRouter (ej.{" "}
                   <code className="text-[11px]">openai/gpt-4o</code>,{" "}
-                  <code className="text-[11px]">anthropic/claude-3.5-sonnet</code>).
+                  <code className="text-[11px]">anthropic/claude-3.5-sonnet</code>). Se guardan en
+                  la base de datos y aplican en local y en Vercel.
                 </p>
                 <div className="mt-3 space-y-3">
                   {USE_CASE_ORDER.map((useCase) => (
@@ -201,7 +185,7 @@ export default function LlmConfigModal({
             disabled={saving || loading}
             className="rounded bg-gray-600 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 dark:bg-gray-500 dark:hover:bg-gray-600 disabled:opacity-50"
           >
-            {saving ? "Guardando…" : "Guardar LLM"}
+            {saving ? "Guardando…" : "Guardar modelos"}
           </button>
         </div>
       </div>

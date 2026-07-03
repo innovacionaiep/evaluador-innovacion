@@ -71,6 +71,38 @@ export async function initDbPostgres(): Promise<void> {
   } catch {
     /* ignore */
   }
+  await sql`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value JSONB NOT NULL
+    )
+  `;
+}
+
+const LLM_MODELS_KEY = "llm_models";
+
+export async function getLlmModelsPostgres(): Promise<Record<string, string> | null> {
+  const sql = getSql();
+  const rows = (await sql`
+    SELECT value FROM app_settings WHERE key = ${LLM_MODELS_KEY}
+  `) as unknown as { value: unknown }[];
+  if (rows.length === 0) return null;
+  const value = rows[0].value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof v === "string" && v.trim()) out[k] = v.trim();
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+export async function saveLlmModelsPostgres(models: Record<string, string>): Promise<void> {
+  const sql = getSql();
+  await sql`
+    INSERT INTO app_settings (key, value)
+    VALUES (${LLM_MODELS_KEY}, ${sql.json(models)})
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+  `;
 }
 
 export type EvaluationTypeRow = {

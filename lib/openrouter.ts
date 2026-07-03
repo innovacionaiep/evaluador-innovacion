@@ -1,6 +1,6 @@
 /**
  * OpenRouter API (OpenAI-compatible). https://openrouter.ai/
- * API keys y modelos: lib/llm-config-server.ts (UI «Configurar LLM») con fallback a .env.
+ * API key: OPENROUTER_API_KEY. Modelos: UI «Configurar LLM» (base de datos).
  */
 
 import "server-only";
@@ -44,7 +44,7 @@ async function runWithRetries<T>(
   run: (model: string, apiKey: string) => Promise<T>,
   options?: { modelOverride?: string; formatError?: boolean }
 ): Promise<T> {
-  const model = resolveModelForUseCase(useCase, options?.modelOverride);
+  const model = await resolveModelForUseCase(useCase, options?.modelOverride);
   const apiKey = getApiKey();
   let lastErr: unknown;
 
