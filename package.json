@@ -15,7 +15,9 @@
     "backfill:rag-meta": "node scripts/run-backfill-rag-meta.cjs",
     "migrate:rubric-report": "npx tsx scripts/migrate-rubric-report-config.ts",
     "migrate:evaluation-config": "npx tsx scripts/migrate-evaluation-config.ts",
-    "check:env": "npx tsx scripts/check-cloud-env.ts"
+    "migrate:supabase-copy": "npx tsx scripts/copy-supabase-config.ts",
+    "check:env": "npx tsx scripts/check-cloud-env.ts",
+    "check:supabase": "npx tsx scripts/verify-supabase.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.0.0",

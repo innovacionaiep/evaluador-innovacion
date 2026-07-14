@@ -272,7 +272,7 @@ export default function ChatPanel({
             ...last,
             content: isTimeout
               ? "[Tiempo de espera agotado. El evaluador tardó demasiado.]"
-              : `[Error: ${msg}]`,
+              : `[Error: ${msg.trim() || "desconocido"}]`,
             traceRevealing: false,
           };
         }
@@ -389,13 +389,13 @@ export default function ChatPanel({
         if (traceIdx >= 0 && traceIdx < next.length && next[traceIdx]?.role === "assistant") {
           next[traceIdx] = {
             ...next[traceIdx],
-            content: `[Error: ${e instanceof Error ? e.message : String(e)}]`,
+            content: `[Error: ${e instanceof Error ? e.message.trim() || "desconocido" : String(e)}]`,
             traceRevealing: false,
           };
         } else {
           next.push({
             role: "assistant",
-            content: `[Error: ${e instanceof Error ? e.message : String(e)}]`,
+            content: `[Error: ${e instanceof Error ? e.message.trim() || "desconocido" : String(e)}]`,
           });
         }
         return next;

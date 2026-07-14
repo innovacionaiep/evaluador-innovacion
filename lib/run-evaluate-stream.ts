@@ -36,6 +36,46 @@ function progressToTrace(message: string): AgentTraceEntry {
   };
 }
 
+/**
+ * El servidor solo usa texto/score de los fragmentos precomputados.
+ * Sin embeddings el POST cabe en el límite de body de Vercel (~4,5 MB);
+ * con topK alto + muchas subdimensiones el payload con vectores lo supera
+ * y la respuesta falla con un error vacío ([Error: ]).
+ */
+function stripEmbeddingsForWire(
+  map: Record<string, RetrievedChunk[]>
+): Record<string, RetrievedChunk[]> {
+  const out: Record<string, RetrievedChunk[]> = {};
+  for (const [key, chunks] of Object.entries(map)) {
+    out[key] = chunks.map((c) => ({
+      id: c.id,
+      docName: c.docName,
+      text: c.text,
+      score: c.score,
+      embedding: [],
+      ...(c.page != null ? { page: c.page } : {}),
+      ...(c.printedPage != null ? { printedPage: c.printedPage } : {}),
+    }));
+  }
+  return out;
+}
+
+function formatEvaluateHttpError(
+  status: number,
+  err: { message?: string; error?: string },
+  statusText: string
+): string {
+  const detail = err?.message || err?.error || statusText || "";
+  if (status === 413 || /payload|entity too large|body.*limit/i.test(detail)) {
+    return (
+      "La petición de evaluación es demasiado grande para el servidor. " +
+      "Reduce topK de RAG en Configuración §5 o desactiva el índice local en Configurar masivo."
+    );
+  }
+  if (detail.trim()) return detail;
+  return `Error al evaluar (HTTP ${status}). Revisa los logs de Vercel o inténtalo de nuevo.`;
+}
+
 export async function runEvaluateStream(params: {
   evaluationTypeId: number;
   projectElementsTable: { element: string; content: string }[];
@@ -61,11 +101,13 @@ export async function runEvaluateStream(params: {
       ).chunks;
 
     params.onTraceUpdate?.([progressToTrace("Buscando fragmentos de referencia en índice local…")]);
-    precomputedSubdimensionChunks = await buildPrecomputedChunksForEvaluation({
-      evaluationTypeId: params.evaluationTypeId,
-      projectElementsTable: params.projectElementsTable,
-      chunks,
-    });
+    precomputedSubdimensionChunks = stripEmbeddingsForWire(
+      await buildPrecomputedChunksForEvaluation({
+        evaluationTypeId: params.evaluationTypeId,
+        projectElementsTable: params.projectElementsTable,
+        chunks,
+      })
+    );
   }
 
   const res = await fetch("/api/evaluate", {
@@ -80,8 +122,11 @@ export async function runEvaluateStream(params: {
   });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err?.message || err?.error || res.statusText);
+    const err = (await res.json().catch(() => ({}))) as {
+      message?: string;
+      error?: string;
+    };
+    throw new Error(formatEvaluateHttpError(res.status, err, res.statusText));
   }
 
   const reader = res.body?.getReader();
@@ -104,7 +149,9 @@ export async function runEvaluateStream(params: {
     for (const line of lines) {
       const event = parseEvaluateNdjsonLine(line);
       if (!event) continue;
-      if (event.type === "error") throw new Error(event.error);
+      if (event.type === "error") {
+        throw new Error(event.error?.trim() || "Error en el pipeline de evaluación");
+      }
       if (event.type === "report_content") {
         reportContent = event.content;
         continue;
@@ -133,7 +180,9 @@ export async function runEvaluateStream(params: {
   if (buffer.trim()) {
     const event = parseEvaluateNdjsonLine(buffer);
     if (event) {
-      if (event.type === "error") throw new Error(event.error);
+      if (event.type === "error") {
+        throw new Error(event.error?.trim() || "Error en el pipeline de evaluación");
+      }
       if (event.type === "report_content") {
         reportContent = event.content;
       }
