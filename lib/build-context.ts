@@ -608,7 +608,7 @@ REGLA para preguntas sobre rúbrica o criterios: Responde únicamente que no hay
               excludeIds: options?.excludeChunkIds,
               pageNumber: options?.pageNumber,
               includeDocNames: evaluateIncludeDocNames,
-              evaluateMode: mode === "evaluate",
+              evaluateMode: false,
             })
           : await retrieveRelevantChunks(evaluationTypeId, ragQuery, {
               topK: limits.topK,
