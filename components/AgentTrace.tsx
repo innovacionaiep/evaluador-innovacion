@@ -31,6 +31,17 @@ const KIND_ICONS: Record<AgentTraceEntry["kind"], string> = {
 
 function ChunkList({ chunks }: { chunks: AgentChunkPreview[] }) {
   const [open, setOpen] = useState(false);
+  const docMix = (() => {
+    const counts = new Map<string, number>();
+    for (const c of chunks) {
+      counts.set(c.docName, (counts.get(c.docName) ?? 0) + 1);
+    }
+    if (counts.size === 0) return "";
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([name, n]) => `${name}×${n}`)
+      .join(", ");
+  })();
   return (
     <div className="mt-1.5">
       <button
@@ -39,6 +50,7 @@ function ChunkList({ chunks }: { chunks: AgentChunkPreview[] }) {
         className="text-xs text-accent underline decoration-dotted hover:text-accent/80"
       >
         {open ? "Ocultar" : "Ver"} {chunks.length} fragmento(s)
+        {docMix ? ` · ${docMix}` : ""}
       </button>
       {open && (
         <ul className="mt-1.5 max-h-48 space-y-1.5 overflow-y-auto rounded border border-border bg-surface-overlay/80 p-2">

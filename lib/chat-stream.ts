@@ -91,7 +91,9 @@ export function applyChatStreamEvent(
         id: nextTraceId(),
         kind: "chunks",
         title: `${event.count} fragmento(s) recuperado(s) del índice RAG`,
-        detail: `${event.totalChars.toLocaleString("es")} caracteres de contexto documental`,
+        detail: event.docMix
+          ? `${event.totalChars.toLocaleString("es")} caracteres · ${event.docMix}`
+          : `${event.totalChars.toLocaleString("es")} caracteres de contexto documental`,
         chunks: event.chunks,
       });
       break;

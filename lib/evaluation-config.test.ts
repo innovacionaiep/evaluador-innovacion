@@ -6,6 +6,8 @@ import {
   defaultEvaluationConfigForType,
   isEvaluationConfigEmpty,
   mergeEvaluationConfig,
+  resolveRagIncludeDocNames,
+  normalizeRagIncludeDocNamesBySubdimension,
 } from "@/lib/evaluation-config";
 import {
   DEFAULT_EVAL_SYSTEM_FALLBACK,
@@ -88,5 +90,46 @@ describe("evaluation-config", () => {
 
     const imet = mergeEvaluationConfig({ evaluation_config: { prompts: {} } }, "IMET");
     assert.equal(imet.prompts.variableEval, DEFAULT_VARIABLE_EVAL_USER_PROMPT);
+  });
+
+  it("resolveRagIncludeDocNames: override > global > todos", () => {
+    const rag = {
+      includeDocNames: ["Oslo.pdf", "TRL.pdf"],
+      includeDocNamesBySubdimension: {
+        "Novedad / Originalidad": ["Oslo.pdf"],
+        "Impacto / Social": [],
+      },
+    };
+    assert.deepEqual(resolveRagIncludeDocNames(rag, "Novedad / Originalidad"), ["Oslo.pdf"]);
+    assert.equal(resolveRagIncludeDocNames(rag, "Impacto / Social"), undefined);
+    assert.deepEqual(resolveRagIncludeDocNames(rag, "Otra / Sub"), ["Oslo.pdf", "TRL.pdf"]);
+    assert.equal(resolveRagIncludeDocNames({}, "X"), undefined);
+  });
+
+  it("mergeEvaluationConfig persiste includeDocNamesBySubdimension", () => {
+    const merged = mergeEvaluationConfig(
+      {
+        evaluation_config: {
+          ragEvaluate: {
+            includeDocNames: ["A.pdf"],
+            includeDocNamesBySubdimension: {
+              "Novedad / Originalidad": ["B.pdf"],
+            },
+          },
+        },
+      },
+      "IGIP"
+    );
+    assert.deepEqual(merged.ragEvaluate.includeDocNames, ["A.pdf"]);
+    assert.deepEqual(merged.ragEvaluate.includeDocNamesBySubdimension, {
+      "Novedad / Originalidad": ["B.pdf"],
+    });
+    assert.deepEqual(
+      normalizeRagIncludeDocNamesBySubdimension({
+        "  X  ": ["  C.pdf  ", "C.pdf", ""],
+        "": ["Z.pdf"],
+      }),
+      { X: ["C.pdf"] }
+    );
   });
 });

@@ -247,11 +247,11 @@ export async function executeAgentTool(
               maxRetrievedChars: limits.maxRetrievedChars,
             });
       artifacts.knowledgeChunks = mergeChunks(artifacts.knowledgeChunks, chunks);
-      const { previews, totalChars } = summarizeChunks(chunks);
+      const { previews, totalChars, docMix } = summarizeChunks(chunks);
       const summary =
         chunks.length === 0
           ? "No se encontraron fragmentos para esta consulta."
-          : `Recuperados ${chunks.length} fragmento(s) (${totalChars} caracteres). Primeros: ${previews
+          : `Recuperados ${chunks.length} fragmento(s) (${totalChars} caracteres; ${docMix}). Primeros: ${previews
               .slice(0, 3)
               .map((p) => `${p.docName}${p.printedPage != null ? ` p.${p.printedPage}` : ""}`)
               .join("; ")}`;

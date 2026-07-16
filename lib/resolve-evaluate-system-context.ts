@@ -14,13 +14,18 @@ export type ResolveEvaluateSystemContextParams = {
   evaluateSubdimension?: { dimensionName: string; name: string; content: string };
   precomputedKnowledgeChunks?: RetrievedChunk[];
   subdimensionLabel: string;
+  /**
+   * Allowlist resuelta para esta subdimensión.
+   * `null` = todos los docs (no heredar global). `string[]` = filtro. Omitido = heredar config.
+   */
+  includeDocNames?: string[] | null;
 };
 
 function buildContextOptions(
   params: ResolveEvaluateSystemContextParams,
   usePrecomputed: boolean
 ) {
-  return {
+  const opts: Parameters<typeof buildSystemContext>[2] = {
     projectElementsTable: params.projectElementsTable,
     projectElementsOnly: true,
     excludeReportFormat: true,
@@ -33,6 +38,10 @@ function buildContextOptions(
         ? { ...createEmptyArtifacts(), knowledgeChunks: params.precomputedKnowledgeChunks }
         : undefined,
   };
+  if ("includeDocNames" in params) {
+    opts.includeDocNames = params.includeDocNames ?? null;
+  }
+  return opts;
 }
 
 /**

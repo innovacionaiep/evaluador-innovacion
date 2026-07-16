@@ -94,13 +94,11 @@ async function runMigrations(): Promise<void> {
       knowledge_paths JSONB DEFAULT '[]',
       rubric_path TEXT DEFAULT '',
       elements JSONB DEFAULT '[]',
-      instructions TEXT DEFAULT '',
       report_format TEXT DEFAULT '',
       rubric_prompt TEXT DEFAULT ''
     )
   `;
   await sql`ALTER TABLE evaluation_type_config ADD COLUMN IF NOT EXISTS elements JSONB DEFAULT '[]'`;
-  await sql`ALTER TABLE evaluation_type_config ADD COLUMN IF NOT EXISTS instructions TEXT DEFAULT ''`;
   await sql`ALTER TABLE evaluation_type_config ADD COLUMN IF NOT EXISTS report_format TEXT DEFAULT ''`;
   await sql`ALTER TABLE evaluation_type_config ADD COLUMN IF NOT EXISTS rubric_prompt TEXT DEFAULT ''`;
   await sql`ALTER TABLE evaluation_type_config ADD COLUMN IF NOT EXISTS pipeline_config JSONB DEFAULT '{}'`;
@@ -110,11 +108,11 @@ async function runMigrations(): Promise<void> {
   await sql`ALTER TABLE evaluation_type_config ADD COLUMN IF NOT EXISTS report_format_config JSONB DEFAULT '{}'`;
   await sql`ALTER TABLE evaluation_type_config ADD COLUMN IF NOT EXISTS evaluation_config JSONB DEFAULT '{}'`;
 
-  // Backfill evaluation_config desde pipeline/report/rag antes de quitar instructions
+  // Backfill evaluation_config desde pipeline/report/rag (sin depender de instructions, ya retirada).
   const legacyRows = (await sql`
     SELECT c.evaluation_type_id, t.name,
            c.evaluation_config, c.pipeline_config, c.report_format_config, c.rag_config,
-           c.rubric_config, c.instructions
+           c.rubric_config
     FROM evaluation_type_config c
     JOIN evaluation_types t ON t.id = c.evaluation_type_id
   `) as unknown as {
@@ -125,7 +123,6 @@ async function runMigrations(): Promise<void> {
     report_format_config: unknown;
     rag_config: unknown;
     rubric_config: unknown;
-    instructions?: string | null;
   }[];
 
   for (const row of legacyRows) {
@@ -147,6 +144,7 @@ async function runMigrations(): Promise<void> {
     `;
   }
 
+  // Limpieza legacy: la columna instructions ya no se usa.
   await sql`ALTER TABLE evaluation_type_config DROP COLUMN IF EXISTS instructions`;
   await sql`
     CREATE TABLE IF NOT EXISTS app_settings (

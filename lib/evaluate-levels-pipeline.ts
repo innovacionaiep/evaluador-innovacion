@@ -3,6 +3,7 @@ import { getEvaluationTypeByIdPostgres } from "@/lib/db-postgres";
 import { streamChat } from "@/lib/openrouter";
 import { getEvaluationConfig } from "@/lib/evaluation-config-server";
 import type { EvaluationConfig } from "@/lib/evaluation-config";
+import { resolveRagIncludeDocNames } from "@/lib/evaluation-config";
 import { getGlobalLlmSemaphore, type EvaluateLlmSemaphore } from "@/lib/evaluate-concurrency";
 import { assembleFinalNivelesReportEvents } from "@/lib/assemble-final-report";
 import {
@@ -70,6 +71,7 @@ type RagPassParams = {
   semaphore?: EvaluateLlmSemaphore;
   precomputedKnowledgeChunks?: RetrievedChunk[];
   subdimensionLabel: string;
+  includeDocNames?: string[] | null;
 };
 
 async function runRagLlmPass(params: RagPassParams): Promise<string> {
@@ -82,6 +84,7 @@ async function runRagLlmPass(params: RagPassParams): Promise<string> {
     evaluateSubdimension: params.evaluateSubdimension,
     precomputedKnowledgeChunks: params.precomputedKnowledgeChunks,
     subdimensionLabel: params.subdimensionLabel,
+    includeDocNames: params.includeDocNames ?? null,
   });
 
   return collectStream(
@@ -198,6 +201,7 @@ async function evaluateVariables(
       semaphore,
       precomputedKnowledgeChunks: precomputedChunks?.[key],
       subdimensionLabel: `variable ${variable.name}`,
+      includeDocNames: resolveRagIncludeDocNames(evaluation.ragEvaluate, key) ?? null,
     });
 
     const level = parseAssignedLevel(analysis, validLevelNumbers(rubric));
@@ -344,6 +348,7 @@ export async function* runEvaluateLevelsPipeline(
       knowledgeLabel: evaluation.knowledgeReferenceLabel,
       semaphore,
       subdimensionLabel: "nivel global (desde variables)",
+      includeDocNames: resolveRagIncludeDocNames(evaluation.ragEvaluate, "nivel-global") ?? null,
     });
 
     rawEvaluation = buildRawEvaluationFromVariables(variableResults, globalAnalysis);
@@ -370,6 +375,7 @@ export async function* runEvaluateLevelsPipeline(
       maxTokens: evaluation.maxTokens.subdimension,
       knowledgeLabel: evaluation.knowledgeReferenceLabel,
       subdimensionLabel: "nivel global",
+      includeDocNames: resolveRagIncludeDocNames(evaluation.ragEvaluate, "nivel-global") ?? null,
     });
 
     assignedLevel = parseAssignedLevel(rawEvaluation, levelNums);

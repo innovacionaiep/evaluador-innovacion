@@ -33,6 +33,16 @@ export type EvaluationRagMode = {
   topK?: number;
   maxRetrievedChars?: number;
   maxSystemChars?: number;
+  /**
+   * Documentos Knowledge (docName) por defecto para todas las subdimensiones.
+   * Omitido / vacío normalizado → todos. Lista no vacía → solo esos.
+   */
+  includeDocNames?: string[];
+  /**
+   * Overrides por clave de subdimensión (`subdimensionScoreKey` o `variableLevelKey`).
+   * Si la clave existe → esa lista (vacía → todos). Si no → includeDocNames global.
+   */
+  includeDocNamesBySubdimension?: Record<string, string[]>;
 };
 
 export type EvaluationPromptOverrides = {
@@ -83,6 +93,44 @@ function clampLimits(minChars: number, maxChars: number): CharLimits {
   const max = Math.max(1, Math.round(maxChars));
   const min = Math.min(max, Math.max(1, Math.round(minChars)));
   return { minChars: min, maxChars: max };
+}
+
+/** Allowlist de docs Knowledge para evaluate; undefined = todos. */
+export function normalizeRagIncludeDocNames(
+  raw: string[] | null | undefined
+): string[] | undefined {
+  if (!raw || !Array.isArray(raw)) return undefined;
+  const unique = [...new Set(raw.map((s) => String(s).trim()).filter(Boolean))];
+  return unique.length > 0 ? unique : undefined;
+}
+
+/** Normaliza el mapa de overrides; conserva claves con [] (= todos para esa sub). */
+export function normalizeRagIncludeDocNamesBySubdimension(
+  raw: Record<string, string[]> | null | undefined
+): Record<string, string[]> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: Record<string, string[]> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    const key = String(k).trim();
+    if (!key || !Array.isArray(v)) continue;
+    const names = normalizeRagIncludeDocNames(v);
+    out[key] = names ?? [];
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * Resuelve allowlist para una subdimensión: override por clave > global > todos.
+ */
+export function resolveRagIncludeDocNames(
+  rag: EvaluationRagMode | null | undefined,
+  subKey: string
+): string[] | undefined {
+  const map = rag?.includeDocNamesBySubdimension;
+  if (map && Object.prototype.hasOwnProperty.call(map, subKey)) {
+    return normalizeRagIncludeDocNames(map[subKey]);
+  }
+  return normalizeRagIncludeDocNames(rag?.includeDocNames);
 }
 
 function resolvePromptOverride(raw: string | undefined, base: string | undefined): string {
@@ -249,6 +297,8 @@ function mergeFromRag(base: EvaluationConfig, rag?: Partial<RagConfig> | null): 
         ev.maxSystemChars != null
           ? clamp(Number(ev.maxSystemChars), 1000, 500_000)
           : base.ragEvaluate.maxSystemChars,
+      includeDocNames: base.ragEvaluate.includeDocNames,
+      includeDocNamesBySubdimension: base.ragEvaluate.includeDocNamesBySubdimension,
     },
   };
 }
@@ -333,6 +383,16 @@ function mergeRawEvaluationConfig(
         raw.ragEvaluate?.maxSystemChars != null
           ? clamp(Number(raw.ragEvaluate.maxSystemChars), 1000, 500_000)
           : base.ragEvaluate.maxSystemChars,
+      includeDocNames:
+        raw.ragEvaluate && "includeDocNames" in raw.ragEvaluate
+          ? normalizeRagIncludeDocNames(raw.ragEvaluate.includeDocNames)
+          : base.ragEvaluate.includeDocNames,
+      includeDocNamesBySubdimension:
+        raw.ragEvaluate && "includeDocNamesBySubdimension" in raw.ragEvaluate
+          ? normalizeRagIncludeDocNamesBySubdimension(
+              raw.ragEvaluate.includeDocNamesBySubdimension
+            )
+          : base.ragEvaluate.includeDocNamesBySubdimension,
     },
     prompts: {
       scoreJsonSystem: resolvePromptOverride(

@@ -37,4 +37,61 @@ describe("evaluate-client-rag", () => {
 
     assert.deepEqual(out, {});
   });
+
+  it("falla si includeDocNames de la sub no deja chunks", async () => {
+    const chunks: StoredChunk[] = [
+      {
+        id: "c1",
+        docName: "Manual.pdf",
+        text: "Criterios",
+        embedding: [0.1],
+      },
+    ];
+
+    await assert.rejects(
+      () =>
+        buildPrecomputedChunksForEvaluation({
+          evaluationTypeId: 99,
+          projectElementsTable: [{ element: "X", content: "Y" }],
+          chunks,
+          plan: {
+            rubricType: "ponderaciones",
+            subdimensions: [
+              {
+                key: "novedad::orig",
+                dimension: "Novedad",
+                name: "Originalidad",
+                rubricContent: "Criterio",
+                includeDocNames: ["OtroDoc.pdf"],
+              },
+            ],
+            ragEvaluate: {
+              topK: 8,
+              maxRetrievedChars: 12_000,
+            },
+            knowledgeReferenceLabel: "Knowledge",
+            projectElementsInRagQuery: 6,
+          },
+        }),
+      /documentos seleccionados/
+    );
+  });
+
+  it("filtra pools distintos por subdimensión según includeDocNames", async () => {
+    const { filterChunksByIncludeDocNames } = await import("@/lib/hybrid-search-core");
+    const chunks: StoredChunk[] = [
+      { id: "1", docName: "Oslo.pdf", text: "a", embedding: [1] },
+      { id: "2", docName: "TRL.pdf", text: "b", embedding: [1] },
+    ];
+    const osloOnly = filterChunksByIncludeDocNames(chunks, ["Oslo.pdf"]);
+    const trlOnly = filterChunksByIncludeDocNames(chunks, ["TRL.pdf"]);
+    assert.deepEqual(
+      osloOnly.map((c) => c.docName),
+      ["Oslo.pdf"]
+    );
+    assert.deepEqual(
+      trlOnly.map((c) => c.docName),
+      ["TRL.pdf"]
+    );
+  });
 });

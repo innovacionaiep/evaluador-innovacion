@@ -138,6 +138,7 @@ export function IgipFlowConfigModal({
               rubric={config.rubric_config}
               reportFormat={config.report_format_config}
               onChange={onConfigChange.setEvaluation}
+              knowledgePaths={config.knowledge_paths}
             />
           </div>
         );

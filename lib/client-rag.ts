@@ -1,5 +1,6 @@
 import type { RetrievedChunk, StoredChunk } from "@/lib/chunk-types";
 import {
+  filterChunksByIncludeDocNames,
   knowledgeChunkQualityAdjustments,
   mergeRetrievedChunks,
   scoreChunks,
@@ -24,6 +25,17 @@ async function fetchEmbeddings(texts: string[]): Promise<number[][]> {
   return Array.isArray(data.embeddings) ? data.embeddings : [];
 }
 
+function filterPool(
+  chunks: StoredChunk[],
+  options: ClientHybridRetrieveOptions
+): StoredChunk[] {
+  let filtered = filterChunksByIncludeDocNames(chunks, options.includeDocNames);
+  if (options.excludeIds) {
+    filtered = filtered.filter((c) => !options.excludeIds!.has(c.id));
+  }
+  return filtered;
+}
+
 /**
  * Búsqueda híbrida en el navegador (misma lógica que servidor; embeddings vía API).
  */
@@ -32,9 +44,7 @@ export async function clientHybridRetrieve(
   queryText: string,
   options: ClientHybridRetrieveOptions = {}
 ): Promise<RetrievedChunk[]> {
-  const filtered = options.excludeIds
-    ? chunks.filter((c) => !options.excludeIds!.has(c.id))
-    : chunks;
+  const filtered = filterPool(chunks, options);
   if (filtered.length === 0 || !queryText.trim()) return [];
 
   const [queryEmbedding] = await fetchEmbeddings([queryText]);
@@ -55,9 +65,7 @@ export async function clientHybridRetrieveMulti(
     return clientHybridRetrieve(chunks, queries[0], options);
   }
 
-  const filtered = options.excludeIds
-    ? chunks.filter((c) => !options.excludeIds!.has(c.id))
-    : chunks;
+  const filtered = filterPool(chunks, options);
   if (filtered.length === 0) return [];
 
   const topK = options.topK ?? 12;
@@ -77,5 +85,5 @@ export async function clientHybridRetrieveMulti(
     batches.push(...batch);
   }
 
-  return mergeRetrievedChunks(batches, topK, maxChars);
+  return mergeRetrievedChunks(batches, topK, maxChars, options.maxPerDoc);
 }

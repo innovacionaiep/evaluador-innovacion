@@ -1,4 +1,5 @@
 import type { RetrievedChunk } from "@/lib/rag-retrieve";
+import { formatDocMixSummary } from "@/lib/hybrid-search-core";
 
 export type AgentChunkPreview = {
   id: string;
@@ -18,7 +19,14 @@ export type ChatStreamEvent =
   | { type: "tool_call"; tool: string; arguments: Record<string, unknown> }
   | { type: "tool_result"; tool: string; summary: string }
   | { type: "rag_query"; query: string; queries?: string[] }
-  | { type: "chunks"; count: number; totalChars: number; chunks: AgentChunkPreview[] }
+  | {
+      type: "chunks";
+      count: number;
+      totalChars: number;
+      chunks: AgentChunkPreview[];
+      /** Resumen de mezcla por documento, p. ej. "2 doc(s): A×3, B×2". */
+      docMix?: string;
+    }
   | { type: "chunks_empty"; message: string }
   | { type: "context_section"; section: string; detail?: string }
   | { type: "thinking"; chunk: string }
@@ -54,10 +62,11 @@ export function chunkToPreview(c: RetrievedChunk): AgentChunkPreview {
 export function summarizeChunks(chunks: RetrievedChunk[]): {
   previews: AgentChunkPreview[];
   totalChars: number;
+  docMix: string;
 } {
   const previews = chunks.map(chunkToPreview);
   const totalChars = chunks.reduce((n, c) => n + c.text.length, 0);
-  return { previews, totalChars };
+  return { previews, totalChars, docMix: formatDocMixSummary(chunks) };
 }
 
 export const INTENT_LABELS: Record<string, string> = {

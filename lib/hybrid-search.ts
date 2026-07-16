@@ -1,6 +1,7 @@
 import type { RetrievedChunk, StoredChunk } from "@/lib/chunk-types";
 import { embedQuery, embedTexts } from "@/lib/embeddings";
 import {
+  filterChunksByIncludeDocNames,
   mergeRetrievedChunks,
   scoreChunks,
   type HybridRetrieveOptions,
@@ -11,10 +12,28 @@ export {
   cosineSimilarity,
   keywordScore,
   knowledgeChunkQualityAdjustments,
+  knowledgeChunkEvaluateScoreAdjust,
+  knowledgeChunkTocAdjustments,
+  computeEvaluateMaxPerDoc,
+  filterChunksByIncludeDocNames,
+  normalizeIncludeDocNames,
+  formatDocMixSummary,
   scoreChunks,
   mergeRetrievedChunks,
+  selectChunksWithLimits,
   type HybridRetrieveOptions,
 } from "@/lib/hybrid-search-core";
+
+function filterPool(
+  chunks: StoredChunk[],
+  options: HybridRetrieveOptions
+): StoredChunk[] {
+  let filtered = filterChunksByIncludeDocNames(chunks, options.includeDocNames);
+  if (options.excludeIds) {
+    filtered = filtered.filter((c) => !options.excludeIds!.has(c.id));
+  }
+  return filtered;
+}
 
 /**
  * Búsqueda híbrida (embeddings + keywords) sobre un conjunto de chunks en memoria.
@@ -24,9 +43,7 @@ export async function hybridRetrieve(
   queryText: string,
   options: HybridRetrieveOptions = {}
 ): Promise<RetrievedChunk[]> {
-  const filtered = options.excludeIds
-    ? chunks.filter((c) => !options.excludeIds!.has(c.id))
-    : chunks;
+  const filtered = filterPool(chunks, options);
   if (filtered.length === 0 || !queryText.trim()) return [];
   const queryEmbedding = await embedQuery(queryText);
   return scoreChunks(filtered, queryText, queryEmbedding, options);
@@ -46,9 +63,7 @@ export async function hybridRetrieveMulti(
     return hybridRetrieve(chunks, queries[0], options);
   }
 
-  const filtered = options.excludeIds
-    ? chunks.filter((c) => !options.excludeIds!.has(c.id))
-    : chunks;
+  const filtered = filterPool(chunks, options);
   if (filtered.length === 0) return [];
 
   const topK = options.topK ?? 12;
@@ -67,5 +82,5 @@ export async function hybridRetrieveMulti(
     batches.push(...batch);
   }
 
-  return mergeRetrievedChunks(batches, topK, maxChars);
+  return mergeRetrievedChunks(batches, topK, maxChars, options.maxPerDoc);
 }

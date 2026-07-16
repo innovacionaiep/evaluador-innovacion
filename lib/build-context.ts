@@ -103,6 +103,12 @@ export type BuildSystemContextOptions = {
   agentArtifacts?: AgentArtifacts;
   /** En evaluate: fallar si el contexto superaría maxSystemChars en lugar de truncar. */
   strictEvaluate?: boolean;
+  /**
+   * Allowlist Knowledge. Si la propiedad está presente:
+   * - `string[]` → filtrar; `null` / vacío normalizado → todos (no hereda el global del config).
+   * Si la propiedad no está → hereda `evaluation_config.ragEvaluate.includeDocNames`.
+   */
+  includeDocNames?: string[] | null;
 };
 
 function buildDefaultRagQuery(
@@ -168,6 +174,12 @@ export async function buildSystemContext(
   if (mode === "evaluate") {
     limits = applyEvaluateRagOverrides(limits, evaluationConfig.ragEvaluate);
   }
+  const evaluateIncludeDocNames =
+    mode === "evaluate"
+      ? options != null && "includeDocNames" in options
+        ? options.includeDocNames ?? undefined
+        : evaluationConfig.ragEvaluate.includeDocNames
+      : options?.includeDocNames ?? undefined;
   const maxSystemChars = limits.maxSystemChars;
   const knowledgeConfigured = await isKnowledgeConfigured(evaluationTypeId);
   const knowledgeIndexReady = knowledgeConfigured && (await hasActiveKnowledgeIndex(evaluationTypeId));
@@ -542,21 +554,26 @@ REGLA para preguntas sobre rúbrica o criterios: Responde únicamente que no hay
 
   const artifactChunks = options?.agentArtifacts?.knowledgeChunks ?? [];
   if (artifactChunks.length > 0) {
-    const { previews, totalChars } = summarizeChunks(artifactChunks);
+    const { previews, totalChars, docMix } = summarizeChunks(artifactChunks);
     emitContextEvent(options, {
       type: "chunks",
       count: artifactChunks.length,
       totalChars,
       chunks: previews,
+      docMix,
     });
     emitContextEvent(options, {
       type: "context_section",
       section: "Knowledge (agente)",
-      detail: `${artifactChunks.length} fragmento(s) recopilados por herramientas del agente`,
+      detail: `${artifactChunks.length} fragmento(s) recopilados · ${docMix}`,
     });
+    const artifactRule =
+      mode === "evaluate"
+        ? "REGLA: Fundamenta el análisis en estos fragmentos. Cita por el nombre exacto de «### Documento:» (no asumas un manual concreto). Si hay varios documentos, úsalos cuando aporten. Traduce/parafrasea al español: PROHIBIDO copiar comillas o bloques en inglés u otro idioma.\n\n"
+        : "REGLA: Fundamenta la respuesta en estos fragmentos recopilados por el agente.\n\n";
     parts.push(
       "## Documentación de referencia (Knowledge)\n\n" +
-        "REGLA: Fundamenta la respuesta en estos fragmentos recopilados por el agente.\n\n" +
+        artifactRule +
         formatKnowledgeChunks(artifactChunks)
     );
   }
@@ -590,31 +607,38 @@ REGLA para preguntas sobre rúbrica o criterios: Responde únicamente que no hay
               maxRetrievedChars: limits.maxRetrievedChars,
               excludeIds: options?.excludeChunkIds,
               pageNumber: options?.pageNumber,
+              includeDocNames: evaluateIncludeDocNames,
+              evaluateMode: mode === "evaluate",
             })
           : await retrieveRelevantChunks(evaluationTypeId, ragQuery, {
               topK: limits.topK,
               maxRetrievedChars: limits.maxRetrievedChars,
               excludeIds: options?.excludeChunkIds,
               pageNumber: options?.pageNumber,
+              includeDocNames: evaluateIncludeDocNames,
+              evaluateMode: mode === "evaluate",
             });
       if (chunks.length > 0) {
         options?.onRetrievedChunks?.(chunks);
-        const { previews, totalChars } = summarizeChunks(chunks);
+        const { previews, totalChars, docMix } = summarizeChunks(chunks);
         emitContextEvent(options, {
           type: "chunks",
           count: chunks.length,
           totalChars,
           chunks: previews,
+          docMix,
         });
         emitContextEvent(options, {
           type: "context_section",
           section: "Knowledge (RAG)",
-          detail: `${chunks.length} fragmento(s) recuperado(s), ${totalChars.toLocaleString("es")} caracteres para el contexto`,
+          detail: `${chunks.length} fragmento(s) recuperado(s), ${totalChars.toLocaleString("es")} caracteres · ${docMix}`,
         });
         const strictKnowledge =
           mode === "chat-knowledge"
             ? "REGLA: Extrae con el máximo detalle posible lo que aparece en estos fragmentos (definiciones, encuestas, métodos, pasos). No inventes tablas ni páginas. Si los fragmentos son parciales, resume primero lo disponible y solo después indica qué aspecto no figura en ellos.\n\n"
-            : "REGLA: Fundamenta tu respuesta en estos fragmentos del manual de referencia cuando sea pertinente. Cita conceptos del marco teórico cuando apliquen.\n\n";
+            : mode === "evaluate"
+              ? "REGLA: Fundamenta el análisis en estos fragmentos de documentación técnica. Cita por el nombre exacto de «### Documento:» del contexto (no asumas un manual concreto). Si hay varios documentos, úsalos cuando aporten. Traduce/parafrasea al español: PROHIBIDO copiar comillas o bloques en inglés u otro idioma.\n\n"
+              : "REGLA: Fundamenta tu respuesta en estos fragmentos del manual de referencia cuando sea pertinente. Cita conceptos del marco teórico cuando apliquen.\n\n";
         const knowledgeSection =
           "## Documentación de referencia (Knowledge)\n\n" +
           strictKnowledge +

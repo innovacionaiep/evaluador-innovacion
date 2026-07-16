@@ -107,6 +107,11 @@ function formatRagParams(ragEvaluate: EvaluationConfig["ragEvaluate"]): string {
       ? `maxSystemChars=${ragEvaluate.maxSystemChars}`
       : "maxSystemChars=default"
   );
+  parts.push(
+    ragEvaluate.includeDocNames?.length
+      ? `includeDocNames=${ragEvaluate.includeDocNames.join("|")}`
+      : "includeDocNames=all"
+  );
   return parts.join(", ");
 }
 
@@ -257,7 +262,20 @@ REGLA: Fundamenta tu respuesta en estos fragmentos del manual de referencia cuan
 
 ── Parámetros de recuperación (Configuración → RAG en evaluación) ──
 • topK = ${evaluation.ragEvaluate.topK ?? "55 (defecto evaluate)"}
-• maxRetrievedChars = ${evaluation.ragEvaluate.maxRetrievedChars ?? "48.000 (defecto evaluate)"}`,
+• maxRetrievedChars = ${evaluation.ragEvaluate.maxRetrievedChars ?? "48.000 (defecto evaluate)"}
+• includeDocNames = ${
+        evaluation.ragEvaluate.includeDocNames?.length
+          ? evaluation.ragEvaluate.includeDocNames.join(", ")
+          : "todos (defecto global)"
+      }
+• includeDocNamesBySubdimension = ${
+        evaluation.ragEvaluate.includeDocNamesBySubdimension &&
+        Object.keys(evaluation.ragEvaluate.includeDocNamesBySubdimension).length
+          ? `${Object.keys(evaluation.ragEvaluate.includeDocNamesBySubdimension).length} override(s)`
+          : "ninguno"
+      }
+• Diversidad: cupo por documento cuando hay ≥2 docs en el pool
+• Idioma: citar en español; prohibido pegar inglés; usar nombres reales de Documento`,
       source: "dinámico",
       included: true,
       configActionIds: ["eval-rag", "knowledge-docs"],

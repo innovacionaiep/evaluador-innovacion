@@ -48,13 +48,33 @@ async function main() {
 
   await sql`ALTER TABLE evaluation_type_config ADD COLUMN IF NOT EXISTS evaluation_config JSONB DEFAULT '{}'`;
 
-  const rows = (await sql`
-    SELECT c.evaluation_type_id, t.name,
-           c.evaluation_config, c.pipeline_config, c.report_format_config, c.rag_config,
-           c.rubric_config, c.instructions
-    FROM evaluation_type_config c
-    JOIN evaluation_types t ON t.id = c.evaluation_type_id
-  `) as {
+  const colRows = (await sql`
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'evaluation_type_config'
+      AND column_name = 'instructions'
+    LIMIT 1
+  `) as unknown as unknown[];
+  const hasInstructions = colRows.length > 0;
+
+  const rows = (
+    hasInstructions
+      ? await sql`
+          SELECT c.evaluation_type_id, t.name,
+                 c.evaluation_config, c.pipeline_config, c.report_format_config, c.rag_config,
+                 c.rubric_config, c.instructions
+          FROM evaluation_type_config c
+          JOIN evaluation_types t ON t.id = c.evaluation_type_id
+        `
+      : await sql`
+          SELECT c.evaluation_type_id, t.name,
+                 c.evaluation_config, c.pipeline_config, c.report_format_config, c.rag_config,
+                 c.rubric_config
+          FROM evaluation_type_config c
+          JOIN evaluation_types t ON t.id = c.evaluation_type_id
+        `
+  ) as {
     evaluation_type_id: number;
     name: string;
     evaluation_config: unknown;
@@ -62,7 +82,7 @@ async function main() {
     report_format_config: unknown;
     rag_config: unknown;
     rubric_config: unknown;
-    instructions: string | null;
+    instructions?: string | null;
   }[];
 
   let updated = 0;

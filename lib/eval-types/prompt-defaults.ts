@@ -46,7 +46,7 @@ Incluye obligatoriamente estas secciones (sin límite de caracteres; sé técnic
    - Una línea exacta con el formato: Nota: N
    - N debe ser un único dígito: {{scoreExamples}} (número arábigo, no palabras)
    - Prohibido omitir la nota, usar rangos, decimales o frases como "nota alta"
-3. **Justificación** — fundamentada en el Knowledge y la evidencia del proyecto
+3. **Justificación** — fundamentada en el Knowledge y la evidencia del proyecto; en español, citando el nombre real de los documentos del contexto (si hay varios, no te limites a uno). PROHIBIDO pegar frases en inglés entre comillas.
 4. **Posibles mejoras** — propuestas concretas y accionables
 
 La línea "Nota: N" debe aparecer en su propia línea, después del Análisis y antes de la Justificación.
@@ -57,7 +57,7 @@ Ejemplo válido:
 Nota: 3
 
 **Justificación**
-(texto)
+(texto en español, con referencias a Documentación técnica por nombre de documento)
 
 Profundiza con detalle técnico del proyecto y del marco teórico sin inventar hechos.
 {{phaseInstructions}}
@@ -65,7 +65,7 @@ Profundiza con detalle técnico del proyecto y del marco teórico sin inventar h
 No uses etiquetas <think>. Responde solo con la evaluación de esta subdimensión.`;
 
 export const DEFAULT_EVAL_SYSTEM_FALLBACK =
-  "Eres un evaluador de proyectos de innovación. Responde solo con la evaluación solicitada, íntegramente en español, sin etiquetas <think>.";
+  "Eres un evaluador de proyectos de innovación. Responde solo con la evaluación solicitada, íntegramente en español. Traduce/parafrasea el Knowledge; no copies fragmentos en inglés. Sin etiquetas <think>.";
 
 export const DEFAULT_VARIABLE_EVAL_USER_PROMPT = `Evalúa la variable/perspectiva "{{variable}}" del proyecto.
 

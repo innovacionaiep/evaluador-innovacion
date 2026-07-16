@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { getConfig, getEvaluationTypeById } from "@/lib/db";
 import { getEvaluationConfig } from "@/lib/evaluation-config-server";
 import {
+  normalizeRagIncludeDocNames,
+  resolveRagIncludeDocNames,
+} from "@/lib/evaluation-config";
+import {
   mergeRubricConfig,
   subdimensionEvalContent,
   buildRubricScoreSchemaFromConfig,
@@ -14,6 +18,27 @@ import {
   variableLevelKey,
 } from "@/lib/rubric-niveles";
 import { CONTEXT_LIMITS, applyEvaluateRagOverrides } from "@/lib/rag-limits";
+
+function ragEvaluatePayload(
+  ragLimits: { topK: number; maxRetrievedChars: number },
+  includeDocNames: string[] | undefined
+) {
+  return {
+    topK: ragLimits.topK,
+    maxRetrievedChars: ragLimits.maxRetrievedChars,
+    ...(includeDocNames ? { includeDocNames } : {}),
+  };
+}
+
+function withResolvedDocs<T extends { key: string }>(
+  items: T[],
+  ragEvaluate: Parameters<typeof resolveRagIncludeDocNames>[0]
+): Array<T & { includeDocNames?: string[] }> {
+  return items.map((item) => {
+    const docs = resolveRagIncludeDocNames(ragEvaluate, item.key);
+    return docs?.length ? { ...item, includeDocNames: docs } : { ...item };
+  });
+}
 
 export async function GET(
   _request: Request,
@@ -37,35 +62,35 @@ export async function GET(
       CONTEXT_LIMITS.evaluate,
       evaluation.ragEvaluate
     );
+    const globalDocs = normalizeRagIncludeDocNames(evaluation.ragEvaluate.includeDocNames);
+    const ragEvaluate = ragEvaluatePayload(ragLimits, globalDocs);
 
     if (rubric.type === "niveles") {
       const niveles = rubric as RubricConfigNiveles;
 
       if (hasRubricVariables(niveles)) {
-        const subdimensions = niveles.variables.map((variable) => ({
-          key: variableLevelKey(variable.name),
-          dimension: "Variables",
-          name: variable.name,
-          rubricContent: variableEvalContent(variable),
-        }));
+        const subdimensions = withResolvedDocs(
+          niveles.variables.map((variable) => ({
+            key: variableLevelKey(variable.name),
+            dimension: "Variables",
+            name: variable.name,
+            rubricContent: variableEvalContent(variable),
+          })),
+          evaluation.ragEvaluate
+        );
 
         return NextResponse.json({
           rubricType: "niveles",
           subdimensions,
-          ragEvaluate: {
-            topK: ragLimits.topK,
-            maxRetrievedChars: ragLimits.maxRetrievedChars,
-          },
+          ragEvaluate,
           knowledgeReferenceLabel: evaluation.knowledgeReferenceLabel,
           projectElementsInRagQuery: evaluation.projectElementsInRagQuery,
         });
       }
 
       const rubricText = mainLevelsRubricText(niveles.levels);
-
-      return NextResponse.json({
-        rubricType: "niveles",
-        subdimensions: [
+      const subdimensions = withResolvedDocs(
+        [
           {
             key: "nivel-global",
             dimension: "Nivel global",
@@ -73,10 +98,13 @@ export async function GET(
             rubricContent: rubricText,
           },
         ],
-        ragEvaluate: {
-          topK: ragLimits.topK,
-          maxRetrievedChars: ragLimits.maxRetrievedChars,
-        },
+        evaluation.ragEvaluate
+      );
+
+      return NextResponse.json({
+        rubricType: "niveles",
+        subdimensions,
+        ragEvaluate,
         knowledgeReferenceLabel: evaluation.knowledgeReferenceLabel,
         projectElementsInRagQuery: evaluation.projectElementsInRagQuery,
       });
@@ -88,24 +116,24 @@ export async function GET(
 
     const schema = buildRubricScoreSchemaFromConfig(rubric);
 
-    const subdimensions = schema.map((entry) => {
-      const dim = rubric.dimensions.find((d) => d.name === entry.dimension);
-      const sub = dim?.subdimensions.find((s) => s.name === entry.name);
-      return {
-        key: entry.key,
-        dimension: entry.dimension,
-        name: entry.name,
-        rubricContent: dim && sub ? subdimensionEvalContent(dim, sub) : "",
-      };
-    });
+    const subdimensions = withResolvedDocs(
+      schema.map((entry) => {
+        const dim = rubric.dimensions.find((d) => d.name === entry.dimension);
+        const sub = dim?.subdimensions.find((s) => s.name === entry.name);
+        return {
+          key: entry.key,
+          dimension: entry.dimension,
+          name: entry.name,
+          rubricContent: dim && sub ? subdimensionEvalContent(dim, sub) : "",
+        };
+      }),
+      evaluation.ragEvaluate
+    );
 
     return NextResponse.json({
       rubricType: "ponderaciones",
       subdimensions,
-      ragEvaluate: {
-        topK: ragLimits.topK,
-        maxRetrievedChars: ragLimits.maxRetrievedChars,
-      },
+      ragEvaluate,
       knowledgeReferenceLabel: evaluation.knowledgeReferenceLabel,
       projectElementsInRagQuery: evaluation.projectElementsInRagQuery,
     });

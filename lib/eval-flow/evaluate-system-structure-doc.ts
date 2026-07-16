@@ -39,6 +39,11 @@ function formatRagParams(ragEvaluate: EvaluationConfig["ragEvaluate"]): string {
       ? `maxSystemChars=${ragEvaluate.maxSystemChars}`
       : "maxSystemChars=default"
   );
+  parts.push(
+    ragEvaluate.includeDocNames?.length
+      ? `includeDocNames=${ragEvaluate.includeDocNames.join("|")}`
+      : "includeDocNames=all"
+  );
   return parts.join(", ");
 }
 

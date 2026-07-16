@@ -26,11 +26,13 @@ export function EvaluationConfigFields({
   rubric,
   reportFormat,
   onChange,
+  knowledgePaths,
 }: {
   evaluation: EvaluationConfig;
   rubric: RubricConfig;
   reportFormat: ReportFormatConfig;
   onChange: (e: EvaluationConfig) => void;
+  knowledgePaths?: Array<string | { name: string; url: string }>;
 }) {
   const { formatReference, setPrompt } = useEvaluationConfigHelpers({
     evaluation,
@@ -115,6 +117,7 @@ export function EvaluationConfigFields({
             rubric={rubric}
             reportFormat={reportFormat}
             onChange={onChange}
+            knowledgePaths={knowledgePaths}
           />
         </div>
       </details>

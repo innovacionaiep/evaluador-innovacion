@@ -3,6 +3,7 @@ import { getEvaluationTypeByIdPostgres } from "@/lib/db-postgres";
 import { streamChat } from "@/lib/openrouter";
 import { getEvaluationConfig } from "@/lib/evaluation-config-server";
 import type { EvaluationConfig } from "@/lib/evaluation-config";
+import { resolveRagIncludeDocNames } from "@/lib/evaluation-config";
 import { getGlobalLlmSemaphore, type EvaluateLlmSemaphore } from "@/lib/evaluate-concurrency";
 import {
   logEvaluateSubdimSummary,
@@ -149,6 +150,8 @@ type RagLlmPassParams = {
   semaphore: EvaluateLlmSemaphore;
   precomputedKnowledgeChunks?: RetrievedChunk[];
   subdimensionLabel: string;
+  /** Allowlist resuelta; null = todos. */
+  includeDocNames?: string[] | null;
 };
 
 async function runRagLlmPass(params: RagLlmPassParams): Promise<string> {
@@ -162,6 +165,7 @@ async function runRagLlmPass(params: RagLlmPassParams): Promise<string> {
       evaluateSubdimension: params.evaluateSubdimension,
       precomputedKnowledgeChunks: params.precomputedKnowledgeChunks,
       subdimensionLabel: params.subdimensionLabel,
+      includeDocNames: params.includeDocNames ?? null,
     });
 
     return collectStream(
@@ -261,6 +265,7 @@ async function evaluateSingleDimension(
       semaphore: ctx.semaphore,
       precomputedKnowledgeChunks: ctx.precomputedSubdimensionChunks?.[scoreKey],
       subdimensionLabel: `${sub.name} (${dim.name})`,
+      includeDocNames: resolveRagIncludeDocNames(ctx.evaluation.ragEvaluate, scoreKey) ?? null,
     };
 
     let subAnalysis: string;

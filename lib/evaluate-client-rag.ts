@@ -2,18 +2,30 @@ import type { RetrievedChunk, StoredChunk } from "@/lib/chunk-types";
 import { clientHybridRetrieve } from "@/lib/client-rag";
 import { buildSubdimensionKnowledgeQuery } from "@/lib/evaluate-rag-query";
 import { subdimensionScoreKey } from "@/lib/evaluation-scores";
+import {
+  computeEvaluateMaxPerDoc,
+  filterChunksByIncludeDocNames,
+  knowledgeChunkEvaluateScoreAdjust,
+  normalizeIncludeDocNames,
+} from "@/lib/hybrid-search-core";
 
 export type EvaluatePlanSubdimension = {
   key: string;
   dimension: string;
   name: string;
   rubricContent: string;
+  /** Allowlist ya resuelta para esta subdimensión (omitido = todos). */
+  includeDocNames?: string[];
 };
 
 export type EvaluatePlanResponse = {
   rubricType?: "ponderaciones" | "niveles";
   subdimensions: EvaluatePlanSubdimension[];
-  ragEvaluate: { topK: number; maxRetrievedChars: number };
+  ragEvaluate: {
+    topK: number;
+    maxRetrievedChars: number;
+    includeDocNames?: string[];
+  };
   knowledgeReferenceLabel: string;
   projectElementsInRagQuery: number;
 };
@@ -37,9 +49,27 @@ export async function buildPrecomputedChunksForEvaluation(params: {
   if (plan.rubricType === "niveles" && plan.subdimensions.length === 1 && plan.subdimensions[0].key === "nivel-global") {
     return {};
   }
+
+  if (params.chunks.length === 0) {
+    throw new Error("No hay fragmentos Knowledge indexados para precomputar la evaluación.");
+  }
+
+  const topK = plan.ragEvaluate.topK;
   const out: Record<string, RetrievedChunk[]> = {};
 
   for (const sub of plan.subdimensions) {
+    const includeDocNames = normalizeIncludeDocNames(sub.includeDocNames);
+    const pool = filterChunksByIncludeDocNames(params.chunks, includeDocNames);
+    if (pool.length === 0) {
+      throw new Error(
+        includeDocNames?.length
+          ? `No hay fragmentos Knowledge de los documentos seleccionados para «${sub.name}» (${includeDocNames.join(", ")}). Revise «RAG en evaluación» o reindexe Knowledge.`
+          : `No hay fragmentos Knowledge para precomputar «${sub.name}».`
+      );
+    }
+
+    const docCount = new Set(pool.map((c) => c.docName)).size;
+    const maxPerDoc = computeEvaluateMaxPerDoc(topK, docCount);
     const dim: { name: string; content: string } = {
       name: sub.dimension,
       content: sub.rubricContent,
@@ -52,9 +82,11 @@ export async function buildPrecomputedChunksForEvaluation(params: {
       plan.projectElementsInRagQuery
     );
     const key = sub.key || subdimensionScoreKey(sub.dimension, sub.name);
-    out[key] = await clientHybridRetrieve(params.chunks, query, {
-      topK: plan.ragEvaluate.topK,
+    out[key] = await clientHybridRetrieve(pool, query, {
+      topK,
       maxRetrievedChars: plan.ragEvaluate.maxRetrievedChars,
+      maxPerDoc,
+      scoreAdjust: knowledgeChunkEvaluateScoreAdjust,
     });
   }
 

@@ -62,11 +62,11 @@ export const CHAT_RESPONSE_LANGUAGE_PREFIX =
 
 /** Regla de idioma para evaluación e informes (system message completo). */
 export const EVALUATION_RESPONSE_LANGUAGE_RULE =
-  "Responde siempre íntegramente en español. Aunque el contexto de Knowledge, la documentación de referencia o fragmentos del proyecto estén en inglés u otro idioma, toda tu evaluación e informe deben estar escritos al 100% en español. Traduce conceptos técnicos si es necesario; no copies ni cites fragmentos en inglés.";
+  "Responde siempre íntegramente en español. Aunque el contexto de Knowledge, la documentación de referencia o fragmentos del proyecto estén en inglés u otro idioma, toda tu evaluación e informe deben estar escritos al 100% en español. Traduce o parafrasea conceptos técnicos; PROHIBIDO copiar comillas, citas literales o bloques en inglés u otro idioma. Cuando cites Knowledge, usa el nombre exacto de «### Documento:» del contexto y expresa la idea en español.";
 
 /** Viñeta reutilizable en prompts de formateo de secciones e informe. */
 export const EVALUATION_REPORT_LANGUAGE_BULLET =
-  "Redacta íntegramente en español (100%). Si el material fuente está en inglés u otro idioma, traduce sin copiar fragmentos en ese idioma.";
+  "Redacta íntegramente en español (100%). Si el material fuente está en inglés u otro idioma, traduce o parafrasea sin copiar comillas ni fragmentos en ese idioma.";
 
 export const EVALUATION_SYSTEM_SUFFIX =
   "\n\nResponde solo con el análisis. No uses etiquetas <think>.";
