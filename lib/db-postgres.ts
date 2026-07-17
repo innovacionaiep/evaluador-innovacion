@@ -716,6 +716,50 @@ export async function deleteEvaluationHistoryPostgres(id: number): Promise<boole
   return rows.length > 0;
 }
 
+export async function updateEvaluationHistoryProjectNamePostgres(
+  id: number,
+  projectName: string
+): Promise<EvaluationHistoryListItem | null> {
+  await ensureDb();
+  const sql = getSql();
+  const trimmed = projectName.trim();
+  if (!trimmed) return null;
+  const rows = (await sql`
+    UPDATE evaluation_history
+    SET project_name = ${trimmed}
+    WHERE id = ${id}
+    RETURNING
+      id, evaluation_type_id, evaluation_type_name, project_name, file_name,
+      subdimension_scores, overall_score, summary, score_schema, created_at
+  `) as unknown as {
+    id: number;
+    evaluation_type_id: number | null;
+    evaluation_type_name: string;
+    project_name: string;
+    file_name: string | null;
+    subdimension_scores: unknown;
+    overall_score: number | null;
+    summary: string | null;
+    score_schema: unknown;
+    created_at: Date | string;
+  }[];
+  if (rows.length === 0) return null;
+  const r = rows[0];
+  return {
+    id: r.id,
+    evaluation_type_id: r.evaluation_type_id,
+    evaluation_type_name: r.evaluation_type_name,
+    project_name: r.project_name,
+    file_name: r.file_name ?? "",
+    subdimension_scores: parseScoresJson(r.subdimension_scores),
+    overall_score: r.overall_score,
+    summary: r.summary ?? "",
+    score_schema: parseSchemaJson(r.score_schema),
+    created_at:
+      typeof r.created_at === "string" ? r.created_at : r.created_at.toISOString(),
+  };
+}
+
 /** Backfill JSONB configs vacíos con defaults según nombre del tipo. */
 export async function backfillEmptyTypeConfigsPostgres(): Promise<number> {
   await ensureDb();

@@ -31,4 +31,5 @@ export {
   listEvaluationHistoryPostgres as listEvaluationHistory,
   getEvaluationHistoryByIdPostgres as getEvaluationHistoryById,
   deleteEvaluationHistoryPostgres as deleteEvaluationHistory,
+  updateEvaluationHistoryProjectNamePostgres as updateEvaluationHistoryProjectName,
 } from "./db-postgres";

@@ -87,6 +87,9 @@ export default function HistoryPanel({
   const [showReport, setShowReport] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [draftName, setDraftName] = useState("");
+  const [renaming, setRenaming] = useState(false);
 
   const tableSchema = useMemo(() => unionScoreSchema(items), [items]);
 
@@ -124,6 +127,8 @@ export default function HistoryPanel({
       setDetail(null);
       setShowReport(false);
       setError(null);
+      setEditingId(null);
+      setDraftName("");
       return;
     }
     void loadList();
@@ -193,11 +198,60 @@ export default function HistoryPanel({
       if (!res.ok) throw new Error(data?.error || `Error ${res.status}`);
       setSelectedId(null);
       setDetail(null);
+      setEditingId(null);
       await loadList();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const startRename = (item: HistoryListItem) => {
+    setEditingId(item.id);
+    setDraftName(item.project_name);
+    setError(null);
+  };
+
+  const cancelRename = () => {
+    setEditingId(null);
+    setDraftName("");
+  };
+
+  const saveRename = async (id: number) => {
+    const nextName = draftName.trim();
+    if (!nextName) {
+      setError("El nombre del proyecto no puede estar vacío");
+      return;
+    }
+    const current = items.find((i) => i.id === id);
+    if (current && current.project_name === nextName) {
+      cancelRename();
+      return;
+    }
+    setRenaming(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/evaluation-history/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectName: nextName }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || `Error ${res.status}`);
+      setItems((prev) =>
+        prev.map((row) =>
+          row.id === id ? { ...row, project_name: nextName } : row
+        )
+      );
+      setDetail((prev) =>
+        prev && prev.id === id ? { ...prev, project_name: nextName } : prev
+      );
+      cancelRename();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRenaming(false);
     }
   };
 
@@ -323,11 +377,70 @@ export default function HistoryPanel({
                           </td>
                           <td
                             className={`${CELL_BORDER} px-2 py-2 align-top text-xs font-medium text-gray-900 dark:text-gray-100`}
-                            title={item.project_name}
+                            title={
+                              editingId === item.id ? undefined : item.project_name
+                            }
+                            onClick={
+                              editingId === item.id
+                                ? (e) => e.stopPropagation()
+                                : undefined
+                            }
                           >
-                            <div className="overflow-hidden whitespace-normal break-words">
-                              {item.project_name}
-                            </div>
+                            {editingId === item.id ? (
+                              <div className="flex flex-col gap-1.5">
+                                <input
+                                  type="text"
+                                  value={draftName}
+                                  autoFocus
+                                  disabled={renaming}
+                                  onChange={(e) => setDraftName(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      e.preventDefault();
+                                      void saveRename(item.id);
+                                    } else if (e.key === "Escape") {
+                                      e.preventDefault();
+                                      cancelRename();
+                                    }
+                                  }}
+                                  className="w-full rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 outline-none focus:border-emerald-500 dark:border-gray-500 dark:bg-[#1e1e1e] dark:text-gray-100"
+                                />
+                                <div className="flex flex-wrap gap-1">
+                                  <button
+                                    type="button"
+                                    disabled={renaming}
+                                    onClick={() => void saveRename(item.id)}
+                                    className="rounded bg-emerald-600 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                                  >
+                                    {renaming ? "Guardando…" : "Guardar"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={renaming}
+                                    onClick={cancelRename}
+                                    className="rounded border border-gray-300 px-2 py-0.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-500 dark:text-gray-200 dark:hover:bg-white/10"
+                                  >
+                                    Cancelar
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="group relative pr-14">
+                                <div className="overflow-hidden whitespace-normal break-words">
+                                  {item.project_name}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    startRename(item);
+                                  }}
+                                  className="absolute right-0 top-0 rounded border border-gray-300 bg-white px-1.5 py-0.5 text-[11px] font-medium text-gray-700 opacity-0 shadow-sm transition hover:bg-gray-50 group-hover:opacity-100 focus:opacity-100 dark:border-gray-500 dark:bg-[#2d2d2d] dark:text-gray-200 dark:hover:bg-white/10"
+                                >
+                                  Editar
+                                </button>
+                              </div>
+                            )}
                           </td>
                           <td
                             className={`${CELL_BORDER} px-2 py-2 align-top text-xs text-gray-700 dark:text-gray-300`}
