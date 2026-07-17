@@ -1,8 +1,5 @@
 import { getConfig } from "@/lib/db";
-import {
-  clearKnowledgeVectorsBlob,
-  headKnowledgeChunksBlob,
-} from "@/lib/blob-chunk-store";
+import { headKnowledgeChunksBlob } from "@/lib/blob-chunk-store";
 import {
   loadChunksAsync,
   loadChunksMetaAsync,
@@ -65,11 +62,10 @@ export async function hasActiveKnowledgeIndex(evaluationTypeId: number): Promise
 export async function clearOrphanKnowledgeIndex(evaluationTypeId: number): Promise<boolean> {
   if (await isKnowledgeConfigured(evaluationTypeId)) return false;
   const headInfo = await headKnowledgeChunksBlob(evaluationTypeId);
-  if (!headInfo || headInfo.size <= 2) return false;
+  if (!headInfo) return false;
   await saveChunks(evaluationTypeId, [], {
     indexedAt: new Date().toISOString(),
     knowledgeVersion: "empty",
   });
-  await clearKnowledgeVectorsBlob(evaluationTypeId);
   return true;
 }

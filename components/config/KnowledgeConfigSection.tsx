@@ -15,6 +15,7 @@ export function KnowledgeDocsSection({
   blobStorageEnabled,
   blobCatalog,
   blobCatalogLoading,
+  blobCatalogLoaded,
   selectedBlobUrls,
   onUploadClick,
   onReindex,
@@ -37,6 +38,8 @@ export function KnowledgeDocsSection({
   blobStorageEnabled: boolean;
   blobCatalog: { name: string; pathname: string; url: string; size: number; uploadedAt: string }[];
   blobCatalogLoading: boolean;
+  /** false hasta el primer list() (Actualizar); evita confundir idle con vacío. */
+  blobCatalogLoaded: boolean;
   selectedBlobUrls: Set<string>;
   onUploadClick: () => void;
   onReindex: () => void;
@@ -157,7 +160,11 @@ export function KnowledgeDocsSection({
             </div>
             {blobCatalog.length === 0 ? (
               <p className="text-xs text-gray-500 dark:text-gray-400">
-                {blobCatalogLoading ? "Buscando archivos…" : "No hay documentos en el almacenamiento."}
+                {blobCatalogLoading
+                  ? "Buscando archivos…"
+                  : !blobCatalogLoaded
+                    ? "Pulsa Actualizar para listar el almacenamiento."
+                    : "No hay documentos en el almacenamiento."}
               </p>
             ) : (
               <ul className="max-h-56 space-y-1 overflow-y-auto text-xs sm:max-h-none">

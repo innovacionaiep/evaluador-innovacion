@@ -8,6 +8,7 @@ import { assertBlobStorageConfigured } from "@/lib/blob-storage";
 import { chunkCacheKey } from "@/lib/chunk-cache";
 import {
   getCachedChunksAsync,
+  getCachedMetaAsync,
   invalidateAsyncChunkCache,
 } from "@/lib/chunk-cache-async";
 import type { KnowledgeIndexMeta, StoredChunk } from "@/lib/chunk-types";
@@ -44,7 +45,8 @@ export function loadChunks(evaluationTypeId: number): StoredChunk[] {
 export async function loadChunksMetaAsync(
   evaluationTypeId: number
 ): Promise<KnowledgeIndexMeta | null> {
-  return loadKnowledgeMetaFromBlob(evaluationTypeId);
+  const key = chunkCacheKey("knowledge", evaluationTypeId);
+  return getCachedMetaAsync(key, () => loadKnowledgeMetaFromBlob(evaluationTypeId));
 }
 
 export function loadChunksMeta(_evaluationTypeId: number): KnowledgeIndexMeta | null {
@@ -57,12 +59,15 @@ export async function saveChunks(
   meta?: KnowledgeIndexMeta
 ): Promise<void> {
   assertBlobStorageConfigured();
-  const enrichedMeta = buildMetaWithStats(chunks, meta);
-  await saveKnowledgeChunksToBlob(evaluationTypeId, chunks, enrichedMeta);
-  invalidateAsyncChunkCache(chunkCacheKey("knowledge", evaluationTypeId));
+  const cacheKey = chunkCacheKey("knowledge", evaluationTypeId);
   if (chunks.length === 0) {
     await clearKnowledgeVectorsBlob(evaluationTypeId);
+    invalidateAsyncChunkCache(cacheKey);
+    return;
   }
+  const enrichedMeta = buildMetaWithStats(chunks, meta);
+  await saveKnowledgeChunksToBlob(evaluationTypeId, chunks, enrichedMeta);
+  invalidateAsyncChunkCache(cacheKey);
 }
 
 export async function hasChunksAsync(evaluationTypeId: number): Promise<boolean> {

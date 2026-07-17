@@ -110,6 +110,8 @@ export default function ConfigPanel({
     { name: string; pathname: string; url: string; size: number; uploadedAt: string }[]
   >([]);
   const [blobCatalogLoading, setBlobCatalogLoading] = useState(false);
+  /** false hasta el primer list() explícito (Actualizar / refresh post-upload). */
+  const [blobCatalogLoaded, setBlobCatalogLoaded] = useState(false);
   const [selectedBlobUrls, setSelectedBlobUrls] = useState<Set<string>>(new Set());
   const [blobStorageEnabled, setBlobStorageEnabled] = useState(false);
   const ragStatusCacheRef = useRef<
@@ -124,7 +126,6 @@ export default function ConfigPanel({
       }
     >
   >(new Map());
-  const blobCatalogLoadedRef = useRef(false);
   const selectedTypeIdRef = useRef<number | null>(null);
 
   const loadBlobCatalog = useCallback(() => {
@@ -134,28 +135,28 @@ export default function ConfigPanel({
       .then((data) => {
         setBlobStorageEnabled(!!data.blobStorage);
         setBlobCatalog(Array.isArray(data.blobs) ? data.blobs : []);
+        setBlobCatalogLoaded(true);
       })
       .catch(() => {
         setBlobCatalog([]);
         setBlobStorageEnabled(false);
+        setBlobCatalogLoaded(true);
       })
       .finally(() => setBlobCatalogLoading(false));
   }, []);
 
+  /** Refresca el panel Blob solo si ya se listó en esta sesión (evita Advanced al abrir Config). */
+  const refreshBlobCatalogIfLoaded = useCallback(() => {
+    if (blobCatalogLoaded) loadBlobCatalog();
+  }, [blobCatalogLoaded, loadBlobCatalog]);
+
   useEffect(() => {
-    if (!isOpen) {
-      blobCatalogLoadedRef.current = false;
-      return;
-    }
+    if (!isOpen) return;
     fetch("/api/upload/capabilities")
       .then((r) => r.json())
       .then((data) => setBlobStorageEnabled(!!data?.blobStorage))
       .catch(() => setBlobStorageEnabled(false));
-    if (!blobCatalogLoadedRef.current) {
-      blobCatalogLoadedRef.current = true;
-      loadBlobCatalog();
-    }
-  }, [isOpen, loadBlobCatalog]);
+  }, [isOpen]);
 
   const refreshRagStatus = useCallback((typeId: number, options?: { force?: boolean }) => {
     const cached = ragStatusCacheRef.current.get(typeId);
@@ -376,6 +377,7 @@ export default function ConfigPanel({
         onTypesChange();
         setKnowledgeIndexStatus(formatIndexStatus(data.chunkCount, data.indexError));
         if (selectedTypeId) refreshRagStatus(selectedTypeId, { force: true });
+        refreshBlobCatalogIfLoaded();
         return;
       }
 
@@ -392,6 +394,7 @@ export default function ConfigPanel({
       onTypesChange();
       setKnowledgeIndexStatus(formatIndexStatus(data.chunkCount, data.indexError));
       if (selectedTypeId) refreshRagStatus(selectedTypeId, { force: true });
+      refreshBlobCatalogIfLoaded();
     } catch (err) {
       setKnowledgeIndexStatus(err instanceof Error ? err.message : String(err));
     } finally {
@@ -447,6 +450,7 @@ export default function ConfigPanel({
       setSelectedBlobUrls(new Set());
       setKnowledgeIndexStatus(formatIndexStatus(data.chunkCount, data.indexError));
       refreshRagStatus(selectedTypeId, { force: true });
+      refreshBlobCatalogIfLoaded();
     } catch (err) {
       setKnowledgeIndexStatus(err instanceof Error ? err.message : String(err));
     } finally {
@@ -603,6 +607,7 @@ export default function ConfigPanel({
     blobStorageEnabled,
     blobCatalog,
     blobCatalogLoading,
+    blobCatalogLoaded,
     selectedBlobUrls,
     onUploadClick: () => knowledgeInputRef.current?.click(),
     onReindex: () => void handleReindexKnowledge(),

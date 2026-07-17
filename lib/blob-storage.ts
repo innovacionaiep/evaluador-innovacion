@@ -48,3 +48,5 @@ export function knowledgeBlobPrefix(evaluationTypeId: number): string {
 export function knowledgeVectorsBlobPath(evaluationTypeId: number, fileName: string): string {
   return `${knowledgeBlobPrefix(evaluationTypeId)}/vectors/${fileName}`;
 }
+
+export { blobStoreId, publicBlobUrl } from "@/lib/blob-public-url";

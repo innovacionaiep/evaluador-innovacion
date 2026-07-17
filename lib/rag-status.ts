@@ -1,5 +1,8 @@
 import { loadChunksAsync, loadChunksMetaAsync } from "@/lib/vector-store";
-import { headKnowledgeChunksBlob } from "@/lib/blob-chunk-store";
+import {
+  headKnowledgeChunksBlob,
+  knowledgeChunksPublicUrl,
+} from "@/lib/blob-chunk-store";
 import {
   clearOrphanKnowledgeIndex,
   isKnowledgeConfigured,
@@ -31,13 +34,22 @@ export async function getRagStatus(evaluationTypeId: number): Promise<RagStatus>
   const meta = await loadChunksMetaAsync(evaluationTypeId);
   let chunkCount = meta?.chunkCount;
   let chunksFileBytes = meta?.chunksFileBytes;
-  const headInfo = await headKnowledgeChunksBlob(evaluationTypeId);
+  const hasChunkCount = typeof chunkCount === "number";
 
-  if (chunksFileBytes == null && headInfo) {
-    chunksFileBytes = headInfo.size;
+  let chunksDownloadUrl = knowledgeChunksPublicUrl(evaluationTypeId);
+
+  // Sin store id (no URL) o meta vieja sin chunkCount → head / carga chunks
+  if (!hasChunkCount || !chunksDownloadUrl) {
+    const headInfo = await headKnowledgeChunksBlob(evaluationTypeId);
+    if (!chunksDownloadUrl) {
+      chunksDownloadUrl = headInfo?.url ?? null;
+    }
+    if (chunksFileBytes == null && headInfo) {
+      chunksFileBytes = headInfo.size;
+    }
   }
 
-  if (chunkCount == null) {
+  if (!hasChunkCount) {
     const chunks = await loadChunksAsync(evaluationTypeId);
     chunkCount = chunks.length;
     if (chunksFileBytes == null) {
@@ -50,6 +62,6 @@ export async function getRagStatus(evaluationTypeId: number): Promise<RagStatus>
   return {
     ...stats,
     knowledgeConfigured: true,
-    chunksDownloadUrl: headInfo?.url ?? null,
+    chunksDownloadUrl,
   };
 }

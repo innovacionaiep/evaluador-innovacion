@@ -1,20 +1,33 @@
 import "server-only";
 
-import { head, put } from "@vercel/blob";
+import { del, head, put } from "@vercel/blob";
 import {
   knowledgeVectorsBlobPath,
   useBlobStorage,
 } from "@/lib/blob-storage";
+import { publicBlobUrl } from "@/lib/blob-public-url";
 import type { KnowledgeIndexMeta, StoredChunk } from "@/lib/vector-store";
 
 const CHUNKS_FILE = "chunks.json";
 const META_FILE = "meta.json";
 
-async function fetchBlobJson<T>(pathname: string): Promise<T | null> {
+async function resolveBlobUrl(pathname: string): Promise<string | null> {
+  const constructed = publicBlobUrl(pathname);
+  if (constructed) return constructed;
   try {
     const meta = await head(pathname);
-    if (!meta?.url) return null;
-    const res = await fetch(meta.url);
+    return meta?.url ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchBlobJson<T>(pathname: string): Promise<T | null> {
+  try {
+    const url = await resolveBlobUrl(pathname);
+    if (!url) return null;
+    const res = await fetch(url);
+    if (res.status === 404) return null;
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch {
@@ -44,6 +57,10 @@ export async function headKnowledgeBlob(pathname: string): Promise<{ size: numbe
   }
 }
 
+/**
+ * Metadata/URL de chunks.json vía head() (Simple). Preferir knowledgeChunksPublicUrl
+ * cuando solo se necesita el link de descarga.
+ */
 export async function headKnowledgeChunksBlob(
   evaluationTypeId: number
 ): Promise<{ size: number; url: string } | null> {
@@ -56,6 +73,11 @@ export async function headKnowledgeChunksBlob(
   } catch {
     return null;
   }
+}
+
+/** URL pública de chunks.json sin head (null si no se puede construir). */
+export function knowledgeChunksPublicUrl(evaluationTypeId: number): string | null {
+  return publicBlobUrl(knowledgeVectorsBlobPath(evaluationTypeId, CHUNKS_FILE));
 }
 
 export async function loadKnowledgeChunksFromBlob(
@@ -89,17 +111,16 @@ export async function saveKnowledgeChunksToBlob(
   }
 }
 
+/** Elimina chunks.json + meta.json. Usa del() (no factura Advanced) en vez de put vacíos. */
 export async function clearKnowledgeVectorsBlob(evaluationTypeId: number): Promise<void> {
   if (!useBlobStorage()) return;
-  const emptyBody = "[]";
-  await saveKnowledgeChunksToBlob(
-    evaluationTypeId,
-    [],
-    {
-      indexedAt: new Date().toISOString(),
-      knowledgeVersion: "empty",
-      chunkCount: 0,
-      chunksFileBytes: emptyBody.length,
-    }
-  );
+  const paths = [
+    knowledgeVectorsBlobPath(evaluationTypeId, CHUNKS_FILE),
+    knowledgeVectorsBlobPath(evaluationTypeId, META_FILE),
+  ];
+  try {
+    await del(paths);
+  } catch {
+    /* ignore missing blobs */
+  }
 }

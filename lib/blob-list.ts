@@ -28,7 +28,7 @@ export async function listKnowledgeBlobsInStore(): Promise<BlobCatalogItem[]> {
   let cursor: string | undefined;
 
   do {
-    const page = await list({ cursor, limit: 1000 });
+    const page = await list({ prefix: "knowledge/", cursor, limit: 1000 });
     for (const blob of page.blobs) {
       if (!isKnowledgeBlobPathname(blob.pathname)) continue;
       items.push({
