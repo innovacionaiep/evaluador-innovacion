@@ -24,6 +24,7 @@ import {
   mergeEvaluationConfig,
   type EvaluationConfig,
 } from "./evaluation-config";
+import type { RubricScoreSchemaEntry } from "./evaluation-scores";
 
 export type ConfigUpdateData = {
   knowledge_paths?: (string | { name: string; url: string })[];
@@ -152,6 +153,82 @@ async function runMigrations(): Promise<void> {
       value JSONB NOT NULL
     )
   `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS evaluation_history (
+      id SERIAL PRIMARY KEY,
+      evaluation_type_id INTEGER REFERENCES evaluation_types(id) ON DELETE SET NULL,
+      evaluation_type_name TEXT NOT NULL,
+      project_name TEXT NOT NULL,
+      file_name TEXT DEFAULT '',
+      report_content TEXT NOT NULL,
+      subdimension_scores JSONB NOT NULL DEFAULT '{}',
+      overall_score DOUBLE PRECISION,
+      summary TEXT DEFAULT '',
+      score_schema JSONB NOT NULL DEFAULT '[]',
+      created_at TIMESTAMPTZ DEFAULT now()
+    )
+  `;
+}
+
+export type EvaluationHistoryListItem = {
+  id: number;
+  evaluation_type_id: number | null;
+  evaluation_type_name: string;
+  project_name: string;
+  file_name: string;
+  subdimension_scores: Record<string, number | null>;
+  overall_score: number | null;
+  summary: string;
+  score_schema: RubricScoreSchemaEntry[];
+  created_at: string;
+};
+
+export type EvaluationHistoryRow = EvaluationHistoryListItem & {
+  report_content: string;
+};
+
+export type EvaluationHistoryCreateInput = {
+  evaluation_type_id: number | null;
+  evaluation_type_name: string;
+  project_name: string;
+  file_name?: string;
+  report_content: string;
+  subdimension_scores: Record<string, number | null>;
+  overall_score?: number | null;
+  summary?: string;
+  score_schema?: RubricScoreSchemaEntry[];
+};
+
+function parseScoresJson(value: unknown): Record<string, number | null> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, number | null> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (v == null) out[k] = null;
+    else if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+  }
+  return out;
+}
+
+function parseSchemaJson(value: unknown): RubricScoreSchemaEntry[] {
+  if (!Array.isArray(value)) return [];
+  const out: RubricScoreSchemaEntry[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.key !== "string" || typeof e.name !== "string") continue;
+    out.push({
+      key: e.key,
+      name: e.name,
+      dimension: typeof e.dimension === "string" ? e.dimension : "",
+      weight:
+        typeof e.weight === "number" && Number.isFinite(e.weight)
+          ? e.weight
+          : e.weight === null
+            ? null
+            : null,
+    });
+  }
+  return out;
 }
 
 export type ConfigRowPostgres = {
@@ -479,6 +556,164 @@ export async function updateConfigPostgres(evaluationTypeId: number, data: Confi
         extract_config = ${sql.json(merged.extract)}
     WHERE evaluation_type_id = ${evaluationTypeId}
   `;
+}
+
+export async function createEvaluationHistoryPostgres(
+  input: EvaluationHistoryCreateInput
+): Promise<EvaluationHistoryRow> {
+  await ensureDb();
+  const sql = getSql();
+  const scores = input.subdimension_scores ?? {};
+  const schema = input.score_schema ?? [];
+  const scoresJson = JSON.parse(JSON.stringify(scores)) as Record<string, number | null>;
+  const schemaJson = JSON.parse(JSON.stringify(schema)) as RubricScoreSchemaEntry[];
+  const rows = (await sql`
+    INSERT INTO evaluation_history (
+      evaluation_type_id,
+      evaluation_type_name,
+      project_name,
+      file_name,
+      report_content,
+      subdimension_scores,
+      overall_score,
+      summary,
+      score_schema
+    )
+    VALUES (
+      ${input.evaluation_type_id},
+      ${input.evaluation_type_name},
+      ${input.project_name},
+      ${input.file_name ?? ""},
+      ${input.report_content},
+      ${sql.json(scoresJson)},
+      ${input.overall_score ?? null},
+      ${input.summary ?? ""},
+      ${sql.json(schemaJson)}
+    )
+    RETURNING
+      id, evaluation_type_id, evaluation_type_name, project_name, file_name,
+      report_content, subdimension_scores, overall_score, summary, score_schema,
+      created_at
+  `) as unknown as {
+    id: number;
+    evaluation_type_id: number | null;
+    evaluation_type_name: string;
+    project_name: string;
+    file_name: string | null;
+    report_content: string;
+    subdimension_scores: unknown;
+    overall_score: number | null;
+    summary: string | null;
+    score_schema: unknown;
+    created_at: Date | string;
+  }[];
+  const r = rows[0];
+  return {
+    id: r.id,
+    evaluation_type_id: r.evaluation_type_id,
+    evaluation_type_name: r.evaluation_type_name,
+    project_name: r.project_name,
+    file_name: r.file_name ?? "",
+    report_content: r.report_content,
+    subdimension_scores: parseScoresJson(r.subdimension_scores),
+    overall_score: r.overall_score,
+    summary: r.summary ?? "",
+    score_schema: parseSchemaJson(r.score_schema),
+    created_at:
+      typeof r.created_at === "string" ? r.created_at : r.created_at.toISOString(),
+  };
+}
+
+export async function listEvaluationHistoryPostgres(
+  limit = 100
+): Promise<EvaluationHistoryListItem[]> {
+  await ensureDb();
+  const sql = getSql();
+  const safeLimit = Math.min(Math.max(1, limit), 500);
+  const rows = (await sql`
+    SELECT
+      id, evaluation_type_id, evaluation_type_name, project_name, file_name,
+      subdimension_scores, overall_score, summary, score_schema, created_at
+    FROM evaluation_history
+    ORDER BY created_at DESC
+    LIMIT ${safeLimit}
+  `) as unknown as {
+    id: number;
+    evaluation_type_id: number | null;
+    evaluation_type_name: string;
+    project_name: string;
+    file_name: string | null;
+    subdimension_scores: unknown;
+    overall_score: number | null;
+    summary: string | null;
+    score_schema: unknown;
+    created_at: Date | string;
+  }[];
+  return rows.map((r) => ({
+    id: r.id,
+    evaluation_type_id: r.evaluation_type_id,
+    evaluation_type_name: r.evaluation_type_name,
+    project_name: r.project_name,
+    file_name: r.file_name ?? "",
+    subdimension_scores: parseScoresJson(r.subdimension_scores),
+    overall_score: r.overall_score,
+    summary: r.summary ?? "",
+    score_schema: parseSchemaJson(r.score_schema),
+    created_at:
+      typeof r.created_at === "string" ? r.created_at : r.created_at.toISOString(),
+  }));
+}
+
+export async function getEvaluationHistoryByIdPostgres(
+  id: number
+): Promise<EvaluationHistoryRow | null> {
+  await ensureDb();
+  const sql = getSql();
+  const rows = (await sql`
+    SELECT
+      id, evaluation_type_id, evaluation_type_name, project_name, file_name,
+      report_content, subdimension_scores, overall_score, summary, score_schema,
+      created_at
+    FROM evaluation_history
+    WHERE id = ${id}
+  `) as unknown as {
+    id: number;
+    evaluation_type_id: number | null;
+    evaluation_type_name: string;
+    project_name: string;
+    file_name: string | null;
+    report_content: string;
+    subdimension_scores: unknown;
+    overall_score: number | null;
+    summary: string | null;
+    score_schema: unknown;
+    created_at: Date | string;
+  }[];
+  if (rows.length === 0) return null;
+  const r = rows[0];
+  return {
+    id: r.id,
+    evaluation_type_id: r.evaluation_type_id,
+    evaluation_type_name: r.evaluation_type_name,
+    project_name: r.project_name,
+    file_name: r.file_name ?? "",
+    report_content: r.report_content,
+    subdimension_scores: parseScoresJson(r.subdimension_scores),
+    overall_score: r.overall_score,
+    summary: r.summary ?? "",
+    score_schema: parseSchemaJson(r.score_schema),
+    created_at:
+      typeof r.created_at === "string" ? r.created_at : r.created_at.toISOString(),
+  };
+}
+
+export async function deleteEvaluationHistoryPostgres(id: number): Promise<boolean> {
+  await ensureDb();
+  const sql = getSql();
+  const rows = (await sql`
+    DELETE FROM evaluation_history WHERE id = ${id} RETURNING id
+  `) as unknown as { id: number }[];
+  return rows.length > 0;
 }
 
 /** Backfill JSONB configs vacíos con defaults según nombre del tipo. */

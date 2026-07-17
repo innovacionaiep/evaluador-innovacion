@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   EvaluateLlmSemaphore,
+  configureGlobalLlmSemaphore,
   getGlobalLlmSemaphore,
   GLOBAL_MAX_CONCURRENT_LLM,
 } from "@/lib/evaluate-concurrency";
@@ -28,6 +29,14 @@ describe("evaluate-concurrency", () => {
     const a = getGlobalLlmSemaphore();
     const b = getGlobalLlmSemaphore();
     assert.equal(a, b);
-    assert.equal(GLOBAL_MAX_CONCURRENT_LLM, 8);
+    assert.equal(GLOBAL_MAX_CONCURRENT_LLM, 5);
+    assert.equal(a.getMax(), GLOBAL_MAX_CONCURRENT_LLM);
+  });
+
+  it("configureGlobalLlmSemaphore actualiza el tope del singleton", () => {
+    const sem = configureGlobalLlmSemaphore(7);
+    assert.equal(sem.getMax(), 7);
+    assert.equal(getGlobalLlmSemaphore().getMax(), 7);
+    configureGlobalLlmSemaphore(GLOBAL_MAX_CONCURRENT_LLM);
   });
 });

@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { getConfig, getEvaluationTypeById } from "@/lib/db";
+import { loadBulkEvaluationConfig } from "@/lib/bulk-evaluation-config-server";
+import { configureGlobalLlmSemaphore } from "@/lib/evaluate-concurrency";
 import { runEvaluatePipeline } from "@/lib/evaluate-pipeline";
 import { runEvaluateLevelsPipeline } from "@/lib/evaluate-levels-pipeline";
 import { assertLlmModelsConfigured } from "@/lib/llm-config-server";
@@ -73,6 +75,9 @@ export async function POST(request: Request) {
       !Array.isArray(body.precomputedSubdimensionChunks)
         ? (body.precomputedSubdimensionChunks as Record<string, RetrievedChunk[]>)
         : undefined;
+
+    const bulkConfig = await loadBulkEvaluationConfig();
+    configureGlobalLlmSemaphore(bulkConfig.maxConcurrentLlm);
 
     const encoder = new TextEncoder();
     const stream = new ReadableStream({

@@ -6,6 +6,9 @@ export type {
   ConfigRowPostgres as ConfigRow,
   EvaluationTypeRow,
   ConfigUpdateData,
+  EvaluationHistoryListItem,
+  EvaluationHistoryRow,
+  EvaluationHistoryCreateInput,
 } from "./db-postgres";
 
 export {
@@ -24,4 +27,8 @@ export {
   getChatAgentConfigPostgres as getChatAgentConfig,
   saveChatAgentConfigPostgres as saveChatAgentConfig,
   backfillEmptyTypeConfigsPostgres as backfillEmptyTypeConfigs,
+  createEvaluationHistoryPostgres as createEvaluationHistory,
+  listEvaluationHistoryPostgres as listEvaluationHistory,
+  getEvaluationHistoryByIdPostgres as getEvaluationHistoryById,
+  deleteEvaluationHistoryPostgres as deleteEvaluationHistory,
 } from "./db-postgres";

@@ -14,6 +14,7 @@ import {
   releasePinnedKnowledgeIndex,
 } from "@/lib/knowledge-index-cache";
 import type { StoredChunk } from "@/lib/chunk-types";
+import type { RubricScoreSchemaEntry } from "@/lib/evaluation-scores";
 
 export type BulkProjectStatus = "pending" | "running" | "done" | "error";
 
@@ -78,10 +79,38 @@ function rowIdForFile(index: number, fileName: string): string {
   return `bulk-${index}-${fileName}`;
 }
 
+async function saveEvaluationToHistory(payload: {
+  evaluationTypeId: number;
+  evaluationTypeName: string;
+  projectName: string;
+  fileName: string;
+  reportContent: string;
+  subdimensionScores: Record<string, number | null>;
+  overallScore: number | null;
+  summary: string;
+  scoreSchema: RubricScoreSchemaEntry[];
+}): Promise<void> {
+  const res = await fetch("/api/evaluation-history", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(data?.error || `Error al guardar historial (${res.status})`);
+  }
+}
+
 export function useBulkEvaluation(
   activeTypeId: number | null,
-  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>
+  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>,
+  options?: {
+    evaluationTypeName?: string;
+    scoreSchema?: RubricScoreSchemaEntry[];
+  }
 ) {
+  const evaluationTypeName = options?.evaluationTypeName ?? "";
+  const scoreSchema = options?.scoreSchema ?? [];
   const [bulkRows, setBulkRows] = useState<BulkProjectRow[]>([]);
   const [bulkAgents, setBulkAgents] = useState<BulkAgentSlot[]>([]);
   const [bulkRunning, setBulkRunning] = useState(false);
@@ -280,10 +309,30 @@ export function useBulkEvaluation(
             throw new Error("Informe incompleto tras la evaluación.");
           }
 
+          let historyNote = "";
+          try {
+            await saveEvaluationToHistory({
+              evaluationTypeId: activeTypeId,
+              evaluationTypeName: evaluationTypeName || "Evaluación",
+              projectName,
+              fileName: file.name,
+              reportContent: evalResult.reportContent,
+              subdimensionScores: evalResult.subdimensionScores,
+              overallScore: evalResult.overallScore,
+              summary: evalResult.evaluationSummary,
+              scoreSchema,
+            });
+          } catch (saveErr) {
+            const saveMsg =
+              saveErr instanceof Error ? saveErr.message : String(saveErr);
+            console.error("No se pudo guardar en historial:", saveMsg);
+            historyNote = ` Historial no guardado: ${saveMsg}`;
+          }
+
           patchAgentSlot(rowId, {
             status: "done",
             trace: evalResult.trace,
-            streamLine: "Evaluación finalizada con éxito.",
+            streamLine: `Evaluación finalizada con éxito.${historyNote}`,
           });
           completed++;
         } catch (e) {
@@ -346,7 +395,16 @@ export function useBulkEvaluation(
         ]);
       }
     },
-    [activeTypeId, bulkRunning, initRowsFromFiles, updateRow, patchAgentSlot, setMessages]
+    [
+      activeTypeId,
+      bulkRunning,
+      evaluationTypeName,
+      scoreSchema,
+      initRowsFromFiles,
+      updateRow,
+      patchAgentSlot,
+      setMessages,
+    ]
   );
 
   return {

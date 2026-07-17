@@ -4,7 +4,11 @@ import {
   assembleFinalNivelesReport,
   assembleFinalPonderacionesReport,
 } from "@/lib/assemble-final-report";
-import { createFormatLlmSemaphore } from "@/lib/evaluate-concurrency";
+import { loadBulkEvaluationConfig } from "@/lib/bulk-evaluation-config-server";
+import {
+  configureGlobalLlmSemaphore,
+  createFormatLlmSemaphore,
+} from "@/lib/evaluate-concurrency";
 import { countFormatLlmSections } from "@/lib/assemble-formatted-report";
 import { assertLlmModelsConfigured } from "@/lib/llm-config-server";
 import { getEvaluationConfig } from "@/lib/evaluation-config-server";
@@ -77,6 +81,9 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+
+    const bulkConfig = await loadBulkEvaluationConfig();
+    configureGlobalLlmSemaphore(bulkConfig.maxConcurrentLlm);
 
     const llmSectionCount = countFormatLlmSections(rubric, reportFormat);
     const semaphore = createFormatLlmSemaphore(llmSectionCount);

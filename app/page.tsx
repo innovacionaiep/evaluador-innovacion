@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import Header from "@/components/Header";
 import ChatPanel from "@/components/ChatPanel";
 import ConfigPanel from "@/components/ConfigPanel";
+import HistoryPanel from "@/components/HistoryPanel";
 import BulkResultsTable from "@/components/BulkResultsTable";
 import ResizableSplitPane from "@/components/ResizableSplitPane";
 import type { ChatMessage } from "@/components/ChatPanel";
@@ -17,6 +18,7 @@ export default function Home() {
   const [evaluationTypes, setEvaluationTypes] = useState<EvaluationType[]>([]);
   const [activeTypeId, setActiveTypeId] = useState<number | null>(null);
   const [configOpen, setConfigOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [bulkFiles, setBulkFiles] = useState<File[]>([]);
   const [exportingExcel, setExportingExcel] = useState(false);
@@ -24,6 +26,8 @@ export default function Home() {
   const prevActiveTypeIdRef = useRef<number | null>(null);
 
   const { scoreSchema } = useEvaluationConfig(activeTypeId, configOpen);
+
+  const activeTypeName = evaluationTypes.find((t) => t.id === activeTypeId)?.name ?? "";
 
   const {
     bulkRows,
@@ -33,7 +37,10 @@ export default function Home() {
     resetBulk,
     cancelBulk,
     initRowsFromFiles,
-  } = useBulkEvaluation(activeTypeId, setMessages);
+  } = useBulkEvaluation(activeTypeId, setMessages, {
+    evaluationTypeName: activeTypeName,
+    scoreSchema,
+  });
 
   const resetSessionState = useCallback(() => {
     setMessages([]);
@@ -71,7 +78,6 @@ export default function Home() {
     };
   }, [configOpen]);
 
-  const activeTypeName = evaluationTypes.find((t) => t.id === activeTypeId)?.name ?? "";
   const reportTitle = activeTypeName
     ? `Informe: ${activeTypeName}`
     : "TITULO DEL INFORME DE EVALUACIÓN";
@@ -110,6 +116,7 @@ export default function Home() {
         types={evaluationTypes}
         activeId={activeTypeId}
         onSelect={setActiveTypeId}
+        onOpenHistory={() => setHistoryOpen(true)}
         onOpenConfig={() => setConfigOpen(true)}
       />
       <ResizableSplitPane
@@ -149,6 +156,7 @@ export default function Home() {
         onTypesChange={() => fetch("/api/evaluation-types").then((r) => r.json()).then(setEvaluationTypes)}
         onSelectType={setActiveTypeId}
       />
+      <HistoryPanel isOpen={historyOpen} onClose={() => setHistoryOpen(false)} />
     </div>
   );
 }

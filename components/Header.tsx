@@ -1,9 +1,7 @@
 "use client";
 
-
-
 import { useState, useRef, useEffect } from "react";
-
+import Image from "next/image";
 import ThemeSwitcher from "@/components/ThemeSwitcher";
 
 type EvaluationType = { id: number; name: string };
@@ -13,11 +11,13 @@ export default function Header({
   activeId,
   onSelect,
   onOpenConfig,
+  onOpenHistory,
 }: {
   types: EvaluationType[];
   activeId: number | null;
   onSelect: (id: number) => void;
   onOpenConfig: () => void;
+  onOpenHistory: () => void;
 }) {
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -58,30 +58,39 @@ export default function Header({
 
   return (
 
-    <header className="relative flex shrink-0 h-12 items-center justify-between border-b border-gray-200 bg-gray-50 px-4 dark:border-gray-700 dark:bg-[#252526]">
+    <header className="relative flex shrink-0 h-12 items-center justify-between overflow-visible border-b border-gray-200 bg-gray-50 px-4 dark:border-gray-700 dark:bg-[#252526]">
 
       <div className="flex items-center gap-3 min-w-0">
-
-        <h1 className="shrink-0 text-base font-semibold text-gray-800 dark:text-gray-100 truncate">
-
+        <Image
+          src="/logo.png"
+          alt="Evaluador de Innovación"
+          width={140}
+          height={140}
+          className="shrink-0"
+          priority
+        />
+        <div
+          className="h-6 w-0.5 shrink-0 bg-white"
+          aria-hidden
+        />
+        <h1 className="ml-4 shrink-0 text-xl font-semibold text-gray-800 dark:text-gray-100 truncate">
           {title}
-
         </h1>
 
         <div className="relative shrink-0" ref={dropdownRef}>
 
           <button
-
             type="button"
-
             onClick={() => setDropdownOpen((open) => !open)}
-
-            className="rounded px-2 py-1 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-200/60 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:text-gray-400 dark:hover:text-gray-300 dark:hover:bg-white/10 dark:focus:ring-gray-500"
-
+            title="Cambiar evaluador"
+            aria-label="Cambiar evaluador"
+            aria-expanded={dropdownOpen}
+            className="shrink-0 flex items-center justify-center rounded p-2 text-gray-600 hover:text-gray-800 hover:bg-gray-200/60 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-white/10 dark:focus:ring-gray-500"
           >
-
-            Cambiar evaluador
-
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="m7 15 5 5 5-5" />
+              <path d="m7 9 5-5 5 5" />
+            </svg>
           </button>
 
           {dropdownOpen && (
@@ -141,6 +150,21 @@ export default function Header({
       </div>
 
       <div className="flex shrink-0 items-center gap-2">
+        <button
+          type="button"
+          onClick={onOpenHistory}
+          title="Historial de evaluaciones"
+          aria-label="Historial de evaluaciones"
+          className="shrink-0 flex items-center gap-1.5 rounded px-2 py-1.5 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-200/60 focus:outline-none focus:ring-1 focus:ring-gray-400 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-white/10 dark:focus:ring-gray-500"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+            <path d="M3 3v5h5" />
+            <path d="M12 7v5l4 2" />
+          </svg>
+          <span>Historial</span>
+        </button>
+
         <ThemeSwitcher />
 
         <button

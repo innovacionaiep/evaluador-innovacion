@@ -1,7 +1,10 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import type { BulkEvaluationConfig } from "@/lib/bulk-evaluation-config";
+import {
+  mergeBulkEvaluationConfig,
+  type BulkEvaluationConfig,
+} from "@/lib/bulk-evaluation-config";
 import {
   defaultBulkEvaluationConfig,
   invalidateBulkEvaluationConfigCache,
@@ -26,7 +29,7 @@ export default function BulkConfigModal({
     fetch("/api/bulk-evaluation-config")
       .then((r) => r.json())
       .then((data: BulkEvaluationConfig) => {
-        setConfig({ ...defaultBulkEvaluationConfig(), ...data });
+        setConfig(mergeBulkEvaluationConfig(data));
       })
       .catch(() => setMessage("No se pudo cargar la configuración masiva."))
       .finally(() => setLoading(false));
@@ -43,7 +46,7 @@ export default function BulkConfigModal({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Error al guardar");
-      setConfig({ ...defaultBulkEvaluationConfig(), ...data });
+      setConfig(mergeBulkEvaluationConfig(data));
       invalidateBulkEvaluationConfigCache();
       setMessage("Configuración masiva guardada.");
     } catch (e) {
@@ -94,7 +97,7 @@ export default function BulkConfigModal({
                   id="parallelProjects"
                   type="number"
                   min={1}
-                  max={8}
+                  max={10}
                   className={`${inputClass} mt-1`}
                   value={config.parallelProjects}
                   onChange={(e) =>
@@ -105,7 +108,31 @@ export default function BulkConfigModal({
                   }
                 />
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Cuántos proyectos se evalúan simultáneamente en modo masivo (1–8).
+                  Cuántos proyectos se evalúan simultáneamente en modo masivo (1–10).
+                </p>
+              </div>
+
+              <div>
+                <label className={labelClass} htmlFor="maxConcurrentLlm">
+                  Llamadas LLM simultáneas
+                </label>
+                <input
+                  id="maxConcurrentLlm"
+                  type="number"
+                  min={1}
+                  max={10}
+                  className={`${inputClass} mt-1`}
+                  value={config.maxConcurrentLlm}
+                  onChange={(e) =>
+                    setConfig((c) => ({
+                      ...c,
+                      maxConcurrentLlm: Number(e.target.value) || 1,
+                    }))
+                  }
+                />
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Tope de llamadas al modelo a la vez entre todos los proyectos (1–10). Subir
+                  acelera; demasiado alto puede saturar el proveedor.
                 </p>
               </div>
 
