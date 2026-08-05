@@ -1,7 +1,7 @@
 import { getEvaluationTypeById } from "@/lib/db";
 import { indexKnowledge, type IndexKnowledgeProgress } from "@/lib/rag-index";
 
-export const maxDuration = 800;
+export const maxDuration = 300;
 
 type ReindexEvent =
   | ({ type: "progress" } & IndexKnowledgeProgress)
