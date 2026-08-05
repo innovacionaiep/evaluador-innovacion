@@ -77,7 +77,16 @@ export function getIgipElementHints(element: ElementDef): string[] {
   }
   if (/escalabilidad/.test(t)) {
     hints.push(
-      "Responde si existen planes de expansión o replicación; no copies las preguntas del formulario."
+      'Busca la fila cuya etiqueta empieza por "Escalabilidad" o pregunta "¿Existen planes para expandir… / adopción…".'
+    );
+    hints.push(
+      "Extrae el texto de respuesta de ESA fila (celdas a la derecha / columnas C–E), no las preguntas del formulario."
+    );
+    hints.push(
+      "Si esa celda tiene contenido aunque se parezca a otro campo (p. ej. Factor innovador por error de pegado en la bitácora), úsalo: no devuelvas vacío."
+    );
+    hints.push(
+      "Si la celda está realmente vacía, busca en el resto del documento menciones a expandir, replicar, adopción por terceros u otras sedes/comunas."
     );
   }
   if (isGanttActivitiesElement(element)) {

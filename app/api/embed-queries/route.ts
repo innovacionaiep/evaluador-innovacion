@@ -20,7 +20,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "texts array required" }, { status: 400 });
     }
 
-    const embeddings = await embedTexts(texts);
+    const embeddings = await embedTexts(texts, {
+      inputType: body?.inputType === "search_document" ? "search_document" : "search_query",
+    });
     return NextResponse.json({ embeddings });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });

@@ -1,10 +1,11 @@
 import { CONTEXT_LIMITS } from "@/lib/rag-limits";
-import { isImet } from "@/lib/eval-types/constants";
+import { isImet, isTrl } from "@/lib/eval-types/constants";
 import {
   DEFAULT_ASSIGN_LEVEL_USER_PROMPT,
   DEFAULT_EVAL_SYSTEM_FALLBACK,
   DEFAULT_GLOBAL_LEVEL_USER_PROMPT,
   DEFAULT_SUBDIMENSION_USER_PROMPT,
+  DEFAULT_TRL_EVAL_USER_PROMPT,
   DEFAULT_VARIABLE_EVAL_USER_PROMPT,
 } from "@/lib/eval-types/prompt-defaults";
 import type { PipelineConfig } from "@/lib/evaluation-type-settings";
@@ -58,6 +59,8 @@ export type EvaluationPromptOverrides = {
   assignLevel?: string;
   /** Plantilla user nivel global desde variables. */
   globalLevel?: string;
+  /** Plantilla user evaluación TRL (clasificación única). */
+  trlEval?: string;
   /** Override system del formateo monolítico de informe. */
   formatSystem?: string;
 };
@@ -141,6 +144,17 @@ function resolvePromptOverride(raw: string | undefined, base: string | undefined
 export function defaultEvaluationConfigForType(typeName?: string | null): EvaluationConfig {
   const label = typeName?.trim() || "IGIP";
   const base = defaultEvaluationConfig(label);
+  if (isTrl(typeName)) {
+    return {
+      ...base,
+      indicatorLabel: "TRL",
+      knowledgeReferenceLabel: "Documentación técnica",
+      prompts: {
+        trlEval: DEFAULT_TRL_EVAL_USER_PROMPT,
+        subdimensionSystem: DEFAULT_EVAL_SYSTEM_FALLBACK,
+      },
+    };
+  }
   if (isImet(typeName)) {
     return {
       ...base,
@@ -414,6 +428,7 @@ function mergeRawEvaluationConfig(
       variableEval: resolvePromptOverride(raw.prompts?.variableEval, base.prompts.variableEval),
       assignLevel: resolvePromptOverride(raw.prompts?.assignLevel, base.prompts.assignLevel),
       globalLevel: resolvePromptOverride(raw.prompts?.globalLevel, base.prompts.globalLevel),
+      trlEval: resolvePromptOverride(raw.prompts?.trlEval, base.prompts.trlEval),
       formatSystem: resolvePromptOverride(raw.prompts?.formatSystem, base.prompts.formatSystem),
     },
   };

@@ -6,14 +6,14 @@ import {
   type EvaluationTypeSettings,
 } from "@/lib/evaluation-type-settings";
 import { defaultReportFormatNiveles } from "@/lib/report-format-config";
-import { defaultRubricConfigNiveles } from "@/lib/rubric-config";
 import { buildExtractTypeSpecificDefaults } from "./extract-config-defaults";
 import {
   DEFAULT_EXTRACT_SYSTEM_PROMPT_IMET,
 } from "./prompt-defaults";
+import { imetOfficialRubric } from "./imet-rubric-official";
 
 export function imetRubricDefault() {
-  return defaultRubricConfigNiveles();
+  return imetOfficialRubric();
 }
 
 export function imetExtractDefault(): ExtractConfig {

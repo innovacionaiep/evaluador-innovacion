@@ -24,6 +24,12 @@ describe("rubric-niveles", () => {
     assert.equal(parseAssignedLevel("Nivel: 9", [0, 1, 2, 3, 4]), null);
   });
 
+  it("parseAssignedLevel tolera markdown alrededor del nivel", () => {
+    assert.equal(parseAssignedLevel("**Nivel:** 2\nJustificación", [1, 2, 3, 4, 5]), 2);
+    assert.equal(parseAssignedLevel("Nivel: **4**", [1, 2, 3, 4, 5]), 4);
+    assert.equal(parseAssignedLevel("Nivel TRL: 7", [1, 2, 3, 4, 5, 6, 7, 8, 9]), 7);
+  });
+
   it("syncVariableLevelsWithMain alinea por índice aunque haya números duplicados", () => {
     const main = [
       { id: "a", level: 2, title: "A", description: "d0" },

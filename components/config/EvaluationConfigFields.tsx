@@ -46,7 +46,9 @@ export function EvaluationConfigFields({
       <p className="shrink-0 text-gray-500 dark:text-gray-400">
         {rubric.type === "ponderaciones"
           ? "Parámetros del proceso IGIP (subdimensiones y dimensiones). Los prompts usan placeholders como {{dimension}}, {{subdimension}}, etc."
-          : "Parámetros del proceso IMET (variables y nivel global). Los prompts usan placeholders como {{variable}}, {{levelNumbers}}, etc."}
+          : rubric.type === "trl"
+            ? "Parámetros del proceso TRL (una evaluación que clasifica el proyecto en un nivel). Placeholders: {{mainScale}}, {{levelNumbers}}, etc."
+            : "Parámetros del proceso IMET (variables y subniveles). El índice es el promedio simple de las notas. Placeholders: {{variable}}, {{levelNumbers}}, etc."}
       </p>
 
       <EvaluationGeneralFields

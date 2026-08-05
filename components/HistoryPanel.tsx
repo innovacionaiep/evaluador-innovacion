@@ -12,6 +12,12 @@ import {
 import { exportHistoryExcel } from "@/lib/bulk-export";
 import { parseResponseJson } from "@/lib/fetch-json";
 import ReportMarkdownView from "@/components/ReportMarkdownView";
+import {
+  FIXED_EVAL_TYPE_KEYS,
+  fixedKeyFor,
+  isTrl,
+  type FixedEvalTypeKey,
+} from "@/lib/eval-types/constants";
 
 type HistoryListItem = {
   id: number;
@@ -73,13 +79,24 @@ function unionScoreSchema(items: HistoryListItem[]): RubricScoreSchemaEntry[] {
   return Array.from(byKey.values());
 }
 
+function resolveInitialFilter(initialTypeName?: string | null): FixedEvalTypeKey {
+  if (initialTypeName?.trim()) return fixedKeyFor(initialTypeName);
+  return "IGIP";
+}
+
 export default function HistoryPanel({
   isOpen,
   onClose,
+  initialTypeName,
 }: {
   isOpen: boolean;
   onClose: () => void;
+  /** Tipo activo del evaluador al abrir el historial (p. ej. TRL). */
+  initialTypeName?: string | null;
 }) {
+  const [typeFilter, setTypeFilter] = useState<FixedEvalTypeKey>(() =>
+    resolveInitialFilter(initialTypeName)
+  );
   const [items, setItems] = useState<HistoryListItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -95,18 +112,21 @@ export default function HistoryPanel({
   const [excelBusy, setExcelBusy] = useState(false);
 
   const tableSchema = useMemo(() => unionScoreSchema(items), [items]);
+  const hideIndicator = isTrl(typeFilter);
 
   const indicatorLabel = useMemo(() => {
-    const names = [...new Set(items.map((i) => i.evaluation_type_name).filter(Boolean))];
-    if (names.length === 1) return `Indicador ${names[0]}`;
-    return "Nota";
-  }, [items]);
+    if (hideIndicator) return "";
+    return `Indicador ${typeFilter}`;
+  }, [hideIndicator, typeFilter]);
 
-  const loadList = useCallback(async () => {
+  const scoreLabel = hideIndicator ? "Nivel TRL" : "Nota global";
+
+  const loadList = useCallback(async (type: FixedEvalTypeKey) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/evaluation-history?limit=100");
+      const params = new URLSearchParams({ limit: "100", type });
+      const res = await fetch(`/api/evaluation-history?${params}`);
       const data = await parseResponseJson<{ error?: string } & HistoryListItem[]>(res);
       if (!res.ok) {
         throw new Error(
@@ -139,8 +159,20 @@ export default function HistoryPanel({
       setDraftName("");
       return;
     }
-    void loadList();
-  }, [isOpen, loadList]);
+    const next = resolveInitialFilter(initialTypeName);
+    setTypeFilter(next);
+    void loadList(next);
+  }, [isOpen, initialTypeName, loadList]);
+
+  const selectTypeFilter = (key: FixedEvalTypeKey) => {
+    if (key === typeFilter) return;
+    setTypeFilter(key);
+    setSelectedId(null);
+    setDetail(null);
+    setShowReport(false);
+    setEditingId(null);
+    void loadList(key);
+  };
 
   useEffect(() => {
     if (!isOpen || selectedId == null) {
@@ -199,7 +231,9 @@ export default function HistoryPanel({
     setExcelBusy(true);
     setError(null);
     try {
-      await exportHistoryExcel(items, tableSchema, indicatorLabel);
+      await exportHistoryExcel(items, tableSchema, indicatorLabel || `Indicador ${typeFilter}`, {
+        includeIndicator: !hideIndicator,
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -220,7 +254,7 @@ export default function HistoryPanel({
       setSelectedId(null);
       setDetail(null);
       setEditingId(null);
-      await loadList();
+      await loadList(typeFilter);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -288,9 +322,36 @@ export default function HistoryPanel({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-gray-200 px-6 py-4 dark:border-gray-600">
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
-            Historial de evaluaciones
-          </h2>
+          <div className="flex min-w-0 flex-wrap items-center gap-3">
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
+              Historial de evaluaciones
+            </h2>
+            <div
+              className="flex items-center gap-1.5"
+              role="tablist"
+              aria-label="Tipo de evaluación del historial"
+            >
+              {FIXED_EVAL_TYPE_KEYS.map((key) => {
+                const selected = typeFilter === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    onClick={() => selectTypeFilter(key)}
+                    className={`rounded-md border px-3 py-1.5 text-sm font-medium transition ${
+                      selected
+                        ? "border-emerald-500 bg-emerald-50 text-emerald-900 ring-2 ring-emerald-400 dark:border-emerald-500 dark:bg-emerald-950/50 dark:text-emerald-100 dark:ring-emerald-600"
+                        : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                    }`}
+                  >
+                    {key}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
@@ -320,7 +381,7 @@ export default function HistoryPanel({
           {/* Tabla de selección (estilo evaluación masiva) */}
           <div className="flex min-w-0 flex-1 flex-col border-r border-gray-200 dark:border-gray-600">
             <div className="shrink-0 border-b border-gray-200 px-4 py-2 text-xs font-medium text-gray-500 dark:border-gray-600 dark:text-gray-400">
-              Evaluaciones guardadas — haz clic en una fila para ver el detalle
+              Historial {typeFilter} — haz clic en una fila para ver el detalle
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-2">
               {loading && (
@@ -328,7 +389,7 @@ export default function HistoryPanel({
               )}
               {!loading && items.length === 0 && (
                 <p className="p-4 text-sm text-gray-500 dark:text-gray-400">
-                  Aún no hay evaluaciones en el historial.
+                  Aún no hay evaluaciones {typeFilter} en el historial.
                 </p>
               )}
               {!loading && items.length > 0 && (
@@ -352,12 +413,6 @@ export default function HistoryPanel({
                       </th>
                       <th
                         className={`${CELL_BORDER} bg-gray-50 px-2 py-2 text-left text-xs font-semibold text-gray-800 dark:bg-[#2d2d2d] dark:text-gray-100`}
-                        style={{ width: 88 }}
-                      >
-                        Tipo
-                      </th>
-                      <th
-                        className={`${CELL_BORDER} bg-gray-50 px-2 py-2 text-left text-xs font-semibold text-gray-800 dark:bg-[#2d2d2d] dark:text-gray-100`}
                         style={{ width: 60 }}
                       >
                         Fecha
@@ -372,12 +427,14 @@ export default function HistoryPanel({
                           <span className="block whitespace-normal break-words">{col.name}</span>
                         </th>
                       ))}
-                      <th
-                        className={`${CELL_BORDER} bg-gray-50 px-2 py-2 text-center text-xs font-semibold text-gray-800 dark:bg-[#2d2d2d] dark:text-gray-100`}
-                        style={{ width: 100 }}
-                      >
-                        {indicatorLabel}
-                      </th>
+                      {!hideIndicator && (
+                        <th
+                          className={`${CELL_BORDER} bg-gray-50 px-2 py-2 text-center text-xs font-semibold text-gray-800 dark:bg-[#2d2d2d] dark:text-gray-100`}
+                          style={{ width: 100 }}
+                        >
+                          {indicatorLabel}
+                        </th>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
@@ -474,17 +531,14 @@ export default function HistoryPanel({
                             )}
                           </td>
                           <td
-                            className={`${CELL_BORDER} px-2 py-2 align-top text-xs text-gray-700 dark:text-gray-300`}
-                          >
-                            {item.evaluation_type_name}
-                          </td>
-                          <td
                             className={`${CELL_BORDER} whitespace-nowrap px-2 py-2 align-top text-xs text-gray-600 dark:text-gray-400`}
                           >
                             {formatDateOnly(item.created_at)}
                           </td>
                           {tableSchema.map((col) => {
-                            const score = item.subdimension_scores[col.key];
+                            const score =
+                              item.subdimension_scores[col.key] ??
+                              (hideIndicator ? item.overall_score : null);
                             return (
                               <td
                                 key={col.key}
@@ -494,13 +548,15 @@ export default function HistoryPanel({
                               </td>
                             );
                           })}
-                          <td
-                            className={`${CELL_BORDER} px-2 py-2 text-center align-top text-xs font-semibold text-gray-900 dark:text-gray-100`}
-                          >
-                            {item.overall_score != null
-                              ? formatIndicatorScore(item.overall_score)
-                              : "—"}
-                          </td>
+                          {!hideIndicator && (
+                            <td
+                              className={`${CELL_BORDER} px-2 py-2 text-center align-top text-xs font-semibold text-gray-900 dark:text-gray-100`}
+                            >
+                              {item.overall_score != null
+                                ? formatIndicatorScore(item.overall_score)
+                                : "—"}
+                            </td>
+                          )}
                         </tr>
                       );
                     })}
@@ -535,7 +591,7 @@ export default function HistoryPanel({
                     {detail.file_name ? ` · ${detail.file_name}` : ""}
                   </p>
                   <p className="text-sm font-medium text-gray-800 dark:text-gray-200">
-                    Nota global:{" "}
+                    {scoreLabel}:{" "}
                     {detail.overall_score != null
                       ? formatIndicatorScore(detail.overall_score)
                       : "—"}

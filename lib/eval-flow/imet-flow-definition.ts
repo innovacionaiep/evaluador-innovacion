@@ -4,11 +4,15 @@ import { FLOW_ACTION_LABELS } from "./igip-flow-definition";
 export type ImetFlowStep = IgipFlowStep;
 
 const IMET_ACTION_LABELS: Partial<Record<FlowConfigActionId, string>> = {
-  rubric: "Rúbrica y niveles",
+  rubric: "Rúbrica de variables y niveles",
 };
 
+export function getImetFlowActionLabel(id: FlowConfigActionId): string {
+  return IMET_ACTION_LABELS[id] ?? FLOW_ACTION_LABELS[id];
+}
+
 function imetAction(id: FlowConfigActionId): FlowConfigAction {
-  return { id, label: IMET_ACTION_LABELS[id] ?? FLOW_ACTION_LABELS[id] };
+  return { id, label: getImetFlowActionLabel(id) };
 }
 
 export const IMET_FLOW_STEPS: ImetFlowStep[] = [
@@ -29,7 +33,7 @@ export const IMET_FLOW_STEPS: ImetFlowStep[] = [
     order: 2,
     title: "Base de conocimiento",
     description:
-      "Documentación de referencia indexada en RAG. Se consulta durante la evaluación por variable o nivel global, no en la extracción.",
+      "Documentación de referencia indexada en RAG. Se consulta durante la evaluación por variable, no en la extracción.",
     branch: true,
     branchTarget: "evaluate",
     actions: [imetAction("knowledge-docs"), imetAction("rag-config")],
@@ -39,15 +43,15 @@ export const IMET_FLOW_STEPS: ImetFlowStep[] = [
     order: 3,
     title: "Rúbrica IMET",
     description:
-      "Define variables de evaluación, escala de niveles y criterios que estructuran la asignación de nivel del emprendimiento.",
+      "Define las variables de evaluación y sus subniveles. Los niveles principales quedan solo como referencia visual.",
     actions: [imetAction("rubric")],
   },
   {
     id: "evaluate",
     order: 4,
-    title: "Evaluación por variables y nivel",
+    title: "Evaluación por variables",
     description:
-      "Por cada variable: consulta RAG (knowledge + proyecto) y genera análisis con nivel asignado. Luego determina el nivel global del proyecto.",
+      "Por cada variable: consulta RAG y genera análisis con subnivel en JSON. El índice IMET es el promedio simple de las notas (2 decimales).",
     actions: [
       imetAction("eval-general"),
       imetAction("eval-orientation"),
@@ -61,7 +65,7 @@ export const IMET_FLOW_STEPS: ImetFlowStep[] = [
     order: 5,
     title: "Ensamblado del informe",
     description:
-      "Redacta secciones según formato §6, integra evaluaciones por variable y síntesis evaluativa final con el nivel asignado.",
+      "Incluye resumen del proyecto, análisis por variable, notas/índice y síntesis evaluativa final.",
     actions: [
       imetAction("report-structure"),
       imetAction("report-prompts"),
@@ -71,9 +75,9 @@ export const IMET_FLOW_STEPS: ImetFlowStep[] = [
   {
     id: "level",
     order: 6,
-    title: "Nivel asignado IMET",
+    title: "Índice IMET",
     description:
-      "Nivel global del emprendimiento determinado a partir de las variables evaluadas. No requiere configuración.",
+      "Promedio simple de los subniveles asignados a cada variable. No requiere configuración.",
     readOnly: true,
     actions: [],
   },

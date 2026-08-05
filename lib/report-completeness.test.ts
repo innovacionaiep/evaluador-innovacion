@@ -113,6 +113,48 @@ Grado de Originalidad de la Idea: 3 (ponderación 25%)
     assert.equal(looksLikeCompleteIgipReport(finalReport), true);
   });
 
+  it("informe TRL incompleto (sin evaluación) no pasa completeness", () => {
+    const incomplete = `## Resumen del proyecto
+
+Resumen corto.
+
+## Evaluación TRL
+
+(Sin evaluación TRL)
+
+## Nivel TRL
+
+Nivel TRL: —
+
+## Síntesis final
+
+Texto de síntesis sin nivel útil.`;
+    assert.equal(looksLikeCompleteIgipReport(incomplete), false);
+  });
+
+  it("informe TRL completo pasa completeness", () => {
+    const complete = `## Resumen del proyecto
+
+Resumen del proyecto con contexto.
+
+## Evaluación TRL
+
+Análisis del estado tecnológico.
+
+Nivel: 3
+
+Justificación del nivel asignado con evidencia.
+
+## Nivel TRL
+
+Nivel TRL: 3
+
+## Síntesis final
+
+Síntesis evaluativa final.`;
+    assert.equal(looksLikeCompleteIgipReport(complete), true);
+  });
+
   it("findMissingFinalReportParts exige Notas e índice en ponderaciones", () => {
     const fmt = enrichReportFormatWithLegacySections(
       defaultReportFormatPonderaciones(rubric),

@@ -24,6 +24,7 @@ export type KnowledgeRagStatusClient = {
   chunksDownloadUrl: string | null;
   chunksFileBytes: number;
   chunkCount: number;
+  knowledgeConfigured?: boolean;
 };
 
 type CachedEntry = {
@@ -114,6 +115,7 @@ export async function fetchRagStatusClient(
     chunksDownloadUrl: data.chunksDownloadUrl ?? null,
     chunksFileBytes: data.chunksFileBytes ?? 0,
     chunkCount: data.chunkCount ?? 0,
+    knowledgeConfigured: data.knowledgeConfigured,
   };
 }
 
@@ -258,7 +260,9 @@ export async function ensureKnowledgeIndex(
   const status = await fetchRagStatusClient(evaluationTypeId);
   if (!status.hasIndex || !status.knowledgeVersion) {
     throw new Error(
-      "No hay índice RAG. Suba documentos en Knowledge y pulse Reindexar RAG en Configuración."
+      status.knowledgeConfigured === false
+        ? "Este tipo de evaluación no tiene documentos Knowledge. En Configuración, pestaña del tipo activo (p. ej. TRL), suba documentos y pulse Reindexar RAG."
+        : "No hay índice RAG. Suba documentos en Knowledge y pulse Reindexar RAG en Configuración."
     );
   }
 

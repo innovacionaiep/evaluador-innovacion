@@ -2,6 +2,9 @@
 
 import type { FlowConfigActionId } from "@/lib/eval-flow/igip-flow-definition";
 import { getFlowActionLabel } from "@/lib/eval-flow/igip-flow-definition";
+import { getImetFlowActionLabel } from "@/lib/eval-flow/imet-flow-definition";
+import { getTrlFlowActionLabel } from "@/lib/eval-flow/trl-flow-definition";
+import { isImet, isTrl } from "@/lib/eval-types/constants";
 import type { EvaluationConfig } from "@/lib/evaluation-config";
 import type { RubricConfig } from "@/lib/rubric-config";
 import type { ReportFormatConfig } from "@/lib/report-format-config";
@@ -64,7 +67,11 @@ export function IgipFlowConfigModal({
 }) {
   if (!actionId) return null;
 
-  const title = getFlowActionLabel(actionId);
+  const title = isTrl(evaluationTypeName)
+    ? getTrlFlowActionLabel(actionId)
+    : isImet(evaluationTypeName)
+      ? getImetFlowActionLabel(actionId)
+      : getFlowActionLabel(actionId);
   const wide = isWideFlowModal(actionId);
 
   const body = (() => {

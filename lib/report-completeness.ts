@@ -140,6 +140,16 @@ export function looksLikeCompleteIgipReport(text: string): boolean {
   const looksLikeRawDraft =
     /(?:^|\n)\s*#{1,3}\s*Subdimensi[oó]n\s*:/i.test(t) && !hasResumen && !hasNotas;
   if (looksLikeRawDraft) return false;
+
+  // TRL: no aceptar Resumen+Síntesis si faltó la evaluación o el nivel numérico
+  const isTrlReport =
+    /(?:^|\n)\s*(?:#{1,3}\s*)?(?:\*\*)?Evaluaci[oó]n\s+TRL(?:\*\*)?\b/i.test(t) ||
+    /(?:^|\n)\s*(?:#{1,3}\s*)?(?:\*\*)?Nivel\s+TRL(?:\*\*)?\b/i.test(t) ||
+    /Sin evaluaci[oó]n TRL/i.test(t);
+  if (isTrlReport) {
+    return looksLikeCompleteTrlReport(t);
+  }
+
   // Informe ponderaciones completo
   if (hasResumen && hasSintesis && hasNotas) return true;
   // Niveles: puede no tener Notas e índice
@@ -147,4 +157,20 @@ export function looksLikeCompleteIgipReport(text: string): boolean {
   // Niveles sin síntesis custom: al menos no es borrador con Subdimensión:
   if (!looksLikeRawDraft && /(?:^|\n)\s*#{1,3}\s*Nivel asignado/i.test(t)) return true;
   return false;
+}
+
+/** Informe TRL ensamblado: resumen + evaluación con nivel + (opcional) síntesis. */
+export function looksLikeCompleteTrlReport(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  if (/Sin evaluaci[oó]n TRL/i.test(t)) return false;
+  const hasResumen = /(?:^|\n)\s*(?:#{1,3}\s*)?Resumen del proyecto\b/i.test(t);
+  const hasEval =
+    /(?:^|\n)\s*(?:#{1,3}\s*)?(?:\*\*)?Evaluaci[oó]n\s+TRL(?:\*\*)?\b/i.test(t) &&
+    t.replace(/\s+/g, " ").length > 80;
+  const hasNumericLevel =
+    /Nivel\s+TRL\s*:\s*\d+\b/i.test(t) ||
+    /(?:\*{0,2}\s*)?Nivel(?:\s+asignado)?\s*\*{0,2}\s*:\s*\*{0,2}\s*\d+\b/i.test(t);
+  if (!hasResumen || !hasEval || !hasNumericLevel) return false;
+  return true;
 }

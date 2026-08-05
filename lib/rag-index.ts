@@ -7,9 +7,15 @@ import { getEvaluationTypeSettings } from "@/lib/evaluation-type-settings-server
 
 export type IndexKnowledgeResult = { chunkCount: number };
 
+export type IndexKnowledgeProgress =
+  | { phase: "extract"; message: string }
+  | { phase: "embed"; done: number; total: number; message: string }
+  | { phase: "save"; message: string };
+
 export type IndexKnowledgeOptions = {
   /** Solo re-indexar estos documentos; conserva chunks del resto. */
   reindexDocNames?: string[];
+  onProgress?: (p: IndexKnowledgeProgress) => void;
 };
 
 function segmentsToStoredChunks(
@@ -54,13 +60,16 @@ export async function indexKnowledge(
   evaluationTypeId: number,
   options: IndexKnowledgeOptions = {}
 ): Promise<IndexKnowledgeResult> {
+  const report = options.onProgress;
   const settings = await getEvaluationTypeSettings(evaluationTypeId);
   const chunkSize = settings.rag.chunkSizeChars;
   const overlap = settings.rag.overlapChars;
+  report?.({ phase: "extract", message: "Extrayendo texto de los documentos…" });
   const segments = await getKnowledgePageSegments(evaluationTypeId);
   const currentDocNames = [...new Set(segments.map((s) => s.docName))];
 
   if (segments.length === 0) {
+    report?.({ phase: "save", message: "Guardando índice vacío…" });
     await saveChunks(evaluationTypeId, [], {
       indexedAt: new Date().toISOString(),
       knowledgeVersion: "empty",
@@ -77,6 +86,7 @@ export async function indexKnowledge(
 
   const segmentsToIndex = segments.filter((s) => reindexSet.has(s.docName));
   if (segmentsToIndex.length === 0 && kept.length > 0) {
+    report?.({ phase: "save", message: "Guardando índice…" });
     await saveChunks(evaluationTypeId, kept, {
       indexedAt: new Date().toISOString(),
       knowledgeVersion: JSON.stringify(currentDocNames),
@@ -87,6 +97,7 @@ export async function indexKnowledge(
   const { allChunks, texts } = segmentsToStoredChunks(segmentsToIndex, chunkSize, overlap);
   if (allChunks.length === 0) {
     const merged = kept;
+    report?.({ phase: "save", message: "Guardando índice…" });
     await saveChunks(evaluationTypeId, merged, {
       indexedAt: new Date().toISOString(),
       knowledgeVersion: JSON.stringify(currentDocNames),
@@ -94,10 +105,26 @@ export async function indexKnowledge(
     return { chunkCount: merged.length };
   }
 
-  const embeddings = await embedTexts(texts);
+  report?.({
+    phase: "embed",
+    done: 0,
+    total: texts.length,
+    message: `Generando embeddings (0/${texts.length})…`,
+  });
+  const embeddings = await embedTexts(texts, {
+    onProgress: (p) => {
+      report?.({
+        phase: "embed",
+        done: p.done,
+        total: p.total,
+        message: `Generando embeddings (${p.done}/${p.total})…`,
+      });
+    },
+  });
   const newStored = mapChunksToStored(allChunks, embeddings);
   const stored = [...kept, ...newStored];
 
+  report?.({ phase: "save", message: "Guardando índice en Blob…" });
   await saveChunks(evaluationTypeId, stored, {
     indexedAt: new Date().toISOString(),
     knowledgeVersion: JSON.stringify(currentDocNames),

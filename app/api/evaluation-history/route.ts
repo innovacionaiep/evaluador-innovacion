@@ -5,6 +5,10 @@ import {
   type EvaluationHistoryCreateInput,
 } from "@/lib/db";
 import type { RubricScoreSchemaEntry } from "@/lib/evaluation-scores";
+import { resolveHistoryEvaluationTypeId } from "@/lib/evaluation-history-resolve";
+import { ensureTrlScoresFromText } from "@/lib/trl-score-recover";
+import { TRL_LEVEL_SCORE_KEY, TRL_LEVEL_SCORE_NAME } from "@/lib/rubric-config";
+import { isTrl } from "@/lib/eval-types/constants";
 
 export const dynamic = "force-dynamic";
 
@@ -24,8 +28,13 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const limitRaw = searchParams.get("limit");
     const limit = limitRaw ? Number(limitRaw) : 100;
+    const typeName =
+      searchParams.get("type")?.trim() ||
+      searchParams.get("evaluationTypeName")?.trim() ||
+      null;
     const items = await listEvaluationHistory(
-      Number.isFinite(limit) ? limit : 100
+      Number.isFinite(limit) ? limit : 100,
+      typeName ? { typeName } : undefined
     );
     return NextResponse.json(items);
   } catch (e) {
@@ -63,10 +72,15 @@ export async function POST(request: Request) {
 
     const evaluationTypeIdRaw =
       body.evaluation_type_id ?? body.evaluationTypeId ?? null;
-    const evaluationTypeId =
+    const evaluationTypeIdCandidate =
       typeof evaluationTypeIdRaw === "number" && Number.isFinite(evaluationTypeIdRaw)
         ? evaluationTypeIdRaw
         : null;
+
+    const evaluationTypeId = await resolveHistoryEvaluationTypeId(
+      evaluationTypeIdCandidate,
+      evaluationTypeName
+    );
 
     const fileName =
       typeof body.file_name === "string" ? body.file_name : (body.fileName ?? "");
@@ -74,11 +88,53 @@ export async function POST(request: Request) {
     const subdimensionScores =
       body.subdimension_scores ?? body.subdimensionScores ?? {};
 
-    const overallScore = body.overall_score ?? body.overallScore ?? null;
+    let overallScore = body.overall_score ?? body.overallScore ?? null;
 
     const summary = typeof body.summary === "string" ? body.summary : "";
 
-    const scoreSchema = body.score_schema ?? body.scoreSchema ?? [];
+    let scoreSchema = body.score_schema ?? body.scoreSchema ?? [];
+
+    // TRL: recuperar nivel desde el informe si el cliente envió scores null
+    if (isTrl(evaluationTypeName)) {
+      const recovered = ensureTrlScoresFromText({
+        reportOrDraft: reportContent,
+        subdimensionScores:
+          subdimensionScores && typeof subdimensionScores === "object"
+            ? (subdimensionScores as Record<string, number | null>)
+            : {},
+        overallScore:
+          typeof overallScore === "number" && Number.isFinite(overallScore)
+            ? overallScore
+            : null,
+      });
+      overallScore = recovered.overallScore;
+      if (
+        !Array.isArray(scoreSchema) ||
+        scoreSchema.length === 0 ||
+        !scoreSchema.some((e: RubricScoreSchemaEntry) => e?.key === TRL_LEVEL_SCORE_KEY)
+      ) {
+        scoreSchema = [
+          {
+            dimension: "TRL",
+            name: TRL_LEVEL_SCORE_NAME,
+            weight: null,
+            key: TRL_LEVEL_SCORE_KEY,
+          },
+        ];
+      }
+      const row = await createEvaluationHistory({
+        evaluation_type_id: evaluationTypeId,
+        evaluation_type_name: evaluationTypeName,
+        project_name: projectName,
+        file_name: fileName,
+        report_content: reportContent,
+        subdimension_scores: recovered.subdimensionScores,
+        overall_score: recovered.overallScore,
+        summary,
+        score_schema: Array.isArray(scoreSchema) ? scoreSchema : [],
+      });
+      return NextResponse.json(row, { status: 201 });
+    }
 
     const row = await createEvaluationHistory({
       evaluation_type_id: evaluationTypeId,

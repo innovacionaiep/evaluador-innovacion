@@ -19,7 +19,7 @@ export type EvaluatePlanSubdimension = {
 };
 
 export type EvaluatePlanResponse = {
-  rubricType?: "ponderaciones" | "niveles";
+  rubricType?: "ponderaciones" | "niveles" | "trl";
   subdimensions: EvaluatePlanSubdimension[];
   ragEvaluate: {
     topK: number;
@@ -39,6 +39,21 @@ export async function fetchEvaluatePlan(evaluationTypeId: number): Promise<Evalu
   return res.json() as Promise<EvaluatePlanResponse>;
 }
 
+/**
+ * Solo la asignación global IMET (sin variables) omite precomputo en cliente.
+ * TRL SÍ usa el índice Knowledge local (una clave `trl:nivel`).
+ */
+export function skipsClientKnowledgePrecompute(plan: EvaluatePlanResponse): boolean {
+  if (
+    plan.rubricType === "niveles" &&
+    plan.subdimensions.length === 1 &&
+    plan.subdimensions[0].key === "nivel-global"
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export async function buildPrecomputedChunksForEvaluation(params: {
   evaluationTypeId: number;
   projectElementsTable: { element: string; content: string }[];
@@ -46,7 +61,7 @@ export async function buildPrecomputedChunksForEvaluation(params: {
   plan?: EvaluatePlanResponse;
 }): Promise<Record<string, RetrievedChunk[]>> {
   const plan = params.plan ?? (await fetchEvaluatePlan(params.evaluationTypeId));
-  if (plan.rubricType === "niveles" && plan.subdimensions.length === 1 && plan.subdimensions[0].key === "nivel-global") {
+  if (skipsClientKnowledgePrecompute(plan)) {
     return {};
   }
 

@@ -68,7 +68,7 @@ export async function hybridRetrieveMulti(
 
   const topK = options.topK ?? 12;
   const maxChars = options.maxRetrievedChars ?? 12_000;
-  const embeddings = await embedTexts(queries);
+  const embeddings = await embedTexts(queries, { inputType: "search_query" });
   const batches: RetrievedChunk[] = [];
 
   for (let i = 0; i < queries.length; i++) {

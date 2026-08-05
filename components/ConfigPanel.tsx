@@ -11,7 +11,7 @@ import { ElementStrategyFields } from "@/components/config/TypeSettingsFields";
 import { EvaluationFlowMap } from "@/components/config/flow/EvaluationFlowMap";
 import { IgipFlowConfigModal } from "@/components/config/flow/IgipFlowConfigModal";
 import type { FlowConfigActionId } from "@/lib/eval-flow/igip-flow-definition";
-import { isIgip, isImet } from "@/lib/eval-types/constants";
+import { isIgip, isImet, isTrl } from "@/lib/eval-types/constants";
 import {
   defaultEvaluationTypeSettings,
   mergeEvaluationTypeSettings,
@@ -39,6 +39,7 @@ import {
 } from "@/lib/report-format-config";
 import { sanitizeFilename } from "@/lib/sanitize-filename";
 import { MAX_VERCEL_SERVER_UPLOAD_BYTES } from "@/lib/upload-limits";
+import { runReindexStream } from "@/lib/reindex-stream";
 
 type EvaluationType = { id: number; name: string };
 type KnowledgeItem = string | { name: string; url: string };
@@ -55,7 +56,7 @@ type Config = {
   extract_config: ExtractConfig;
 };
 
-function findTypeByKey(types: EvaluationType[], key: "IGIP" | "IMET") {
+function findTypeByKey(types: EvaluationType[], key: "IGIP" | "IMET" | "TRL") {
   return types.find((t) => t.name.toUpperCase().includes(key)) ?? null;
 }
 
@@ -302,7 +303,7 @@ export default function ConfigPanel({
       });
       if (!res.ok) throw new Error((await res.json()).error || "Error");
       const savedTypeName = types.find((t) => t.id === selectedTypeId)?.name;
-      if (savedTypeName && (isIgip(savedTypeName) || isImet(savedTypeName))) {
+      if (savedTypeName && (isIgip(savedTypeName) || isImet(savedTypeName) || isTrl(savedTypeName))) {
         setFlowPromptRefreshKey((k) => k + 1);
       }
     } finally {
@@ -460,17 +461,52 @@ export default function ConfigPanel({
 
   const handleReindexKnowledge = async () => {
     if (!selectedTypeId) return;
+    const typeId = selectedTypeId;
+    const startedAt = Date.now();
     setIndexingKnowledge(true);
-    setKnowledgeIndexStatus("Regenerando índice RAG…");
+    setKnowledgeIndexStatus("Regenerando índice RAG… (documentos grandes pueden tardar varios minutos)");
+
+    const formatElapsed = () => {
+      const s = Math.round((Date.now() - startedAt) / 1000);
+      return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+    };
+
+    const tickId = window.setInterval(() => {
+      setKnowledgeIndexStatus((prev) => {
+        if (!prev || prev.startsWith("Error") || prev.includes("Índice RAG generado")) return prev;
+        const base = prev.replace(/\s*\([^)]*\)\s*$/, "").trim();
+        return `${base} (${formatElapsed()})`;
+      });
+    }, 2000);
+
     try {
-      const res = await fetch(`/api/config/${selectedTypeId}/reindex`, { method: "POST" });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || "Error al reindexar");
-      setKnowledgeIndexStatus(formatIndexStatus(data.chunkCount) ?? "Índice actualizado.");
-      refreshRagStatus(selectedTypeId, { force: true });
+      const { chunkCount } = await runReindexStream({
+        evaluationTypeId: typeId,
+        onProgress: (message) => {
+          setKnowledgeIndexStatus(`${message} (${formatElapsed()})`);
+        },
+      });
+      setKnowledgeIndexStatus(formatIndexStatus(chunkCount) ?? "Índice actualizado.");
+      refreshRagStatus(typeId, { force: true });
     } catch (err) {
+      // Si el navegador corta la petición larga pero el servidor ya terminó, el índice puede existir.
+      try {
+        const statusRes = await fetch(`/api/config/${typeId}/rag-status`);
+        const status = await statusRes.json().catch(() => null);
+        if (status?.hasIndex && typeof status.chunkCount === "number" && status.chunkCount > 0) {
+          setKnowledgeIndexStatus(
+            formatIndexStatus(status.chunkCount) ??
+              `Índice RAG generado: ${status.chunkCount} fragmentos.`
+          );
+          refreshRagStatus(typeId, { force: true });
+          return;
+        }
+      } catch {
+        /* ignore */
+      }
       setKnowledgeIndexStatus(err instanceof Error ? err.message : String(err));
     } finally {
+      window.clearInterval(tickId);
       setIndexingKnowledge(false);
     }
   };
@@ -639,8 +675,10 @@ export default function ConfigPanel({
   const selectedTypeName = types.find((t) => t.id === selectedTypeId)?.name;
   const igipType = findTypeByKey(types, "IGIP");
   const imetType = findTypeByKey(types, "IMET");
+  const trlType = findTypeByKey(types, "TRL");
   const isImetSelected = selectedTypeName != null && isImet(selectedTypeName);
-  const flowKind = isImetSelected ? "IMET" : "IGIP";
+  const isTrlSelected = selectedTypeName != null && isTrl(selectedTypeName);
+  const flowKind = isTrlSelected ? "TRL" : isImetSelected ? "IMET" : "IGIP";
 
   const dimensionCount =
     config.rubric_config.type === "ponderaciones"
@@ -653,9 +691,22 @@ export default function ConfigPanel({
   const variableCount =
     config.rubric_config.type === "niveles" ? config.rubric_config.variables.length : 0;
   const levelCount =
-    config.rubric_config.type === "niveles" ? config.rubric_config.levels.length : 0;
+    config.rubric_config.type === "niveles" || config.rubric_config.type === "trl"
+      ? config.rubric_config.levels.length
+      : 0;
 
-  const flowStepStatuses = isImetSelected
+  const flowStepStatuses = isTrlSelected
+    ? {
+        extract: `${config.elements.length} elemento${config.elements.length === 1 ? "" : "s"}`,
+        knowledge: ragStatus?.hasIndex
+          ? `${ragStatus.chunkCount} fragmentos`
+          : `${config.knowledge_paths.length} doc${config.knowledge_paths.length === 1 ? "" : "s"}`,
+        rubric: `${levelCount} nivel${levelCount === 1 ? "" : "es"}`,
+        evaluate: "1 evaluación TRL",
+        report: `${expandReportSections(config.rubric_config, config.report_format_config).length} secciones`,
+        level: "Automático",
+      }
+    : isImetSelected
     ? {
         extract: `${config.elements.length} elemento${config.elements.length === 1 ? "" : "s"}`,
         knowledge: ragStatus?.hasIndex
@@ -704,8 +755,8 @@ export default function ConfigPanel({
           <div className="flex items-center gap-4">
             <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Configuración</h2>
             <div className="flex items-center gap-2" role="tablist" aria-label="Tipo de evaluación">
-              {(["IGIP", "IMET"] as const).map((key) => {
-                const t = key === "IGIP" ? igipType : imetType;
+              {(["IGIP", "IMET", "TRL"] as const).map((key) => {
+                const t = key === "IGIP" ? igipType : key === "IMET" ? imetType : trlType;
                 const selected = t != null && selectedTypeId === t.id;
                 return (
                   <button
@@ -788,7 +839,7 @@ export default function ConfigPanel({
             {!selectedTypeId ? (
               <div className="flex flex-1 items-center justify-center p-4">
                 <p className="text-sm text-amber-800 dark:text-amber-200">
-                  Seleccione IGIP o IMET para configurar.
+                  Seleccione IGIP, IMET o TRL para configurar.
                 </p>
               </div>
             ) : loading ? (

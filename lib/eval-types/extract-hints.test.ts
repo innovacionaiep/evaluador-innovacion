@@ -22,6 +22,15 @@ describe("extract-hints", () => {
     assert.ok(hints.some((h) => h.includes("Necesidad, problema")));
   });
 
+  it("getIgipElementHints Escalabilidad prioriza fila etiquetada", () => {
+    const hints = getIgipElementHints({
+      title: "Escalabilidad",
+      description: "Planes de expansión",
+    });
+    assert.ok(hints.some((h) => /Escalabilidad/i.test(h)));
+    assert.ok(hints.some((h) => /no devuelvas vacío/i.test(h)));
+  });
+
   it("getImetElementHints aplica reglas IMET", () => {
     const hints = getImetElementHints({
       title: "Nombre del proyecto",
@@ -33,8 +42,8 @@ describe("extract-hints", () => {
   it("IMET no recibe pista de nombre del emprendimiento en IGIP", () => {
     const igip = getIgipElementHints({ title: "Nombre del proyecto", description: "" });
     const imet = getImetElementHints({ title: "Nombre del proyecto", description: "" });
-    assert.equal(igip.length, 0);
-    assert.ok(imet.length > 0);
+    assert.ok(!igip.some((h) => /emprendimiento/i.test(h)));
+    assert.ok(imet.some((h) => /emprendimiento/i.test(h)));
   });
 
   it("buildElementLlmHints incluye hints del elemento", () => {

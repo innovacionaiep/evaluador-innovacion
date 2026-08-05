@@ -3,6 +3,7 @@ import { getConfig, getEvaluationTypeById } from "@/lib/db";
 import {
   assembleFinalNivelesReport,
   assembleFinalPonderacionesReport,
+  assembleFinalTrlReport,
 } from "@/lib/assemble-final-report";
 import { loadBulkEvaluationConfig } from "@/lib/bulk-evaluation-config-server";
 import {
@@ -20,8 +21,16 @@ import {
 import {
   findMissingFinalReportParts,
   isFinalReportComplete,
+  looksLikeCompleteTrlReport,
 } from "@/lib/report-completeness";
-import { isRubricConfigValid, mergeRubricConfig } from "@/lib/rubric-config";
+import {
+  isRubricConfigValid,
+  mergeRubricConfig,
+  type RubricConfigNiveles,
+  type RubricConfigTrl,
+} from "@/lib/rubric-config";
+import { parseAssignedLevel } from "@/lib/rubric-niveles";
+import { ensureTrlScoresFromText } from "@/lib/trl-score-recover";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -125,12 +134,62 @@ export async function POST(request: Request) {
       });
     }
 
+    if (rubric.type === "trl") {
+      const trlRubric = rubric as RubricConfigTrl;
+      const levelNums = trlRubric.levels.map((l) => l.level);
+      const recovered = ensureTrlScoresFromText({
+        reportOrDraft: rawEvaluation,
+        subdimensionScores,
+        overallScore: overallScore ?? null,
+        validLevels: levelNums,
+      });
+      const assignedLevel =
+        typeof body?.assignedLevel === "number"
+          ? body.assignedLevel
+          : recovered.overallScore ?? parseAssignedLevel(rawEvaluation, levelNums);
+      const levelTitle =
+        typeof body?.levelTitle === "string"
+          ? body.levelTitle
+          : trlRubric.levels.find((l) => l.level === assignedLevel)?.title ?? "";
+
+      const result = await assembleFinalTrlReport({
+        rubric: trlRubric,
+        reportFormat,
+        rawEvaluation,
+        projectElementsTable,
+        evaluation,
+        assignedLevel,
+        levelTitle,
+        subdimensionScores: recovered.subdimensionScores,
+        overallScore: recovered.overallScore,
+        semaphore,
+      });
+
+      if (!looksLikeCompleteTrlReport(result.finalReport)) {
+        return NextResponse.json(
+          {
+            error: "incomplete_report",
+            message:
+              "Informe TRL incompleto tras formateo (faltan evaluación o nivel numérico).",
+          },
+          { status: 502 }
+        );
+      }
+
+      return NextResponse.json({
+        reportContent: result.finalReport,
+        evaluationSummary: result.evaluationSummary,
+        subdimensionScores: result.subdimensionScores,
+        overallScore: result.overallScore,
+      });
+    }
+
     const assignedLevel =
       typeof body?.assignedLevel === "number" ? body.assignedLevel : null;
     const levelTitle = typeof body?.levelTitle === "string" ? body.levelTitle : "";
 
     const result = await assembleFinalNivelesReport({
-      rubric,
+      rubric: rubric as RubricConfigNiveles,
       reportFormat,
       rawEvaluation,
       projectElementsTable,

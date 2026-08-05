@@ -73,7 +73,7 @@ export function KnowledgeDocsSection({
             disabled={indexingKnowledge}
             className="shrink-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
           >
-            Reindexar RAG
+            {indexingKnowledge ? "Reindexando…" : "Reindexar RAG"}
           </button>
         )}
       </div>
@@ -91,12 +91,19 @@ export function KnowledgeDocsSection({
               : "sin indexar (pulse Reindexar RAG tras subir documentos)"}
         </p>
       )}
+      {indexingKnowledge && (
+        <p className="mt-1 shrink-0 text-xs text-amber-700 dark:text-amber-300">
+          Manuales grandes (p. ej. OSLO) pueden tardar varios minutos. Verás el avance de embeddings abajo.
+        </p>
+      )}
       {knowledgeIndexStatus && (
         <p
           className={`mt-1 shrink-0 text-xs ${
             knowledgeIndexStatus.startsWith("Error") || knowledgeIndexStatus.includes("Error al indexar")
               ? "text-red-600 dark:text-red-400"
-              : "text-emerald-700 dark:text-emerald-400"
+              : indexingKnowledge
+                ? "text-amber-700 dark:text-amber-300"
+                : "text-emerald-700 dark:text-emerald-400"
           }`}
         >
           {knowledgeIndexStatus}

@@ -304,7 +304,8 @@ export function buildAuthoritativeScoresSection(
   overallScore: number | null,
   indicatorLabel = "IGIP"
 ): string {
-  const lines = ["**Notas e índice**", "", "| Subdimensión | Nota |", "| --- | --- |"];
+  const rowLabel = /imet/i.test(indicatorLabel) ? "Variable" : "Subdimensión";
+  const lines = ["**Notas e índice**", "", `| ${rowLabel} | Nota |`, "| --- | --- |"];
   for (const entry of schema) {
     const score = scores[entry.key];
     if (score != null) lines.push(`| ${entry.name} | ${score} |`);
@@ -313,6 +314,14 @@ export function buildAuthoritativeScoresSection(
     lines.push("", `**Índice ${indicatorLabel}**: ${formatIndicatorScore(overallScore)}`);
   }
   return lines.join("\n");
+}
+
+/** Bloque autoritativo TRL: solo el nivel asignado. */
+export function buildAuthoritativeTrlLevelSection(level: number | null): string {
+  if (level == null) {
+    return ["**Nivel TRL**", "", "Nivel TRL: —"].join("\n");
+  }
+  return ["**Nivel TRL**", "", `Nivel TRL: ${level}`].join("\n");
 }
 
 /** Mismo bloque autoritativo a partir del JSON de evaluación. */

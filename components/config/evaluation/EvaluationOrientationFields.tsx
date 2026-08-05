@@ -49,6 +49,33 @@ export function EvaluationOrientationFields({
     );
   }
 
+  if (rubric.type === "trl") {
+    return (
+      <div className="rounded border border-gray-200 bg-gray-50/60 p-2 dark:border-gray-600 dark:bg-gray-900/40">
+        <span className="mb-1 block font-medium text-gray-800 dark:text-gray-200">
+          Texto opcional en plantilla (evaluación TRL)
+        </span>
+        <p className="mb-1.5 text-[10px] leading-snug text-gray-500 dark:text-gray-400">
+          Vacío por defecto. La plantilla user TRL ya define análisis, nivel, justificación y
+          sugerencias.
+        </p>
+        <textarea
+          className={`${textareaClass} min-h-[72px]`}
+          value={evaluation.phaseInstructions.subdimensionEval}
+          onChange={(e) => setPhase("subdimensionEval", e.target.value)}
+          placeholder={OPTIONAL_SUBDIM_PLACEHOLDER}
+        />
+        <button
+          type="button"
+          className="mt-1 text-gray-500 hover:underline"
+          onClick={() => setPhase("subdimensionEval", "")}
+        >
+          Limpiar
+        </button>
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="rounded border border-gray-200 bg-gray-50/60 p-2 dark:border-gray-600 dark:bg-gray-900/40">

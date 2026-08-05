@@ -11,13 +11,15 @@ export type ReportAssemblyMethod =
   | "verbatim_subdimension"
   | "verbatim_variable"
   | "verbatim_assigned_level"
+  | "verbatim_trl_eval"
+  | "deterministic_trl_level"
   | "llm_synthesis";
 
 export type ReportAssemblySequenceStep = {
   order: number;
   title: string;
   method: ReportAssemblyMethod;
-  /** Etiqueta corta para la UI del mapa de proceso. */
+  /** Etiqueta corta para la UI del mapa de flujo. */
   methodLabel: string;
   /** Cadena de prompts de la que proviene la plantilla (referencia cruzada). */
   chainId: string;
@@ -28,6 +30,8 @@ const METHOD_LABELS: Record<ReportAssemblyMethod, string> = {
   verbatim_subdimension: "Sin LLM — copia literal",
   verbatim_variable: "Sin LLM — copia literal",
   verbatim_assigned_level: "Sin LLM — copia literal",
+  verbatim_trl_eval: "Sin LLM — copia literal",
+  deterministic_trl_level: "Determinista — Nivel TRL: N",
   llm_synthesis: "LLM — síntesis final (prompt distinto)",
 };
 
@@ -36,6 +40,8 @@ const CHAIN_BY_METHOD: Record<ReportAssemblyMethod, string> = {
   verbatim_subdimension: "report-subdim-verbatim",
   verbatim_variable: "report-verbatim",
   verbatim_assigned_level: "report-verbatim",
+  verbatim_trl_eval: "report-verbatim",
+  deterministic_trl_level: "report-trl-level",
   llm_synthesis: "report-synthesis",
 };
 
@@ -50,6 +56,8 @@ function methodForSection(section: ReportSection): ReportAssemblyMethod {
   if (section.kind === "subdimension_eval") return "verbatim_subdimension";
   if (section.kind === "variable_eval") return "verbatim_variable";
   if (section.kind === "assigned_level") return "verbatim_assigned_level";
+  if (section.kind === "trl_eval") return "verbatim_trl_eval";
+  if (section.kind === "trl_level") return "deterministic_trl_level";
   return "llm_section_format";
 }
 
@@ -89,6 +97,8 @@ export function perSectionLlmRepeatLabel(
   const suffix =
     rubric.type === "ponderaciones"
       ? " (resumen + dimensiones)"
-      : " (secciones con formateo)";
+      : rubric.type === "trl"
+        ? " (resumen + síntesis)"
+        : " (secciones con formateo)";
   return `× ${count} ${noun}${suffix}`;
 }

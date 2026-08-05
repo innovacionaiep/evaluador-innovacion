@@ -5,6 +5,7 @@ export {
   isFixedEvalTypeName,
   isIgip,
   isImet,
+  isTrl,
   rubricTypeFor,
   fixedKeyFor,
   canonicalFixedName,
@@ -18,6 +19,7 @@ export {
   DEFAULT_VARIABLE_EVAL_USER_PROMPT,
   DEFAULT_ASSIGN_LEVEL_USER_PROMPT,
   DEFAULT_GLOBAL_LEVEL_USER_PROMPT,
+  DEFAULT_TRL_EVAL_USER_PROMPT,
   applyPromptTemplate,
 } from "./prompt-defaults";
 
@@ -38,6 +40,15 @@ export {
 } from "./imet";
 
 export {
+  trlRubricDefault,
+  trlExtractDefault,
+  trlEvaluationDefaults,
+  trlReportFormatDefault,
+  trlTypeSettings,
+  trlDefaultElements,
+} from "./trl";
+
+export {
   buildElementLlmHints,
   getIgipElementHints,
   getImetElementHints,
@@ -52,4 +63,5 @@ export {
 } from "./extract-config-defaults";
 
 export { ensureFixedEvaluationTypes, type EnsuredEvalType } from "./ensure-fixed-types";
+export { syncTrlElementsFromIgip } from "./sync-trl-elements-from-igip";
 export { defaultsForType } from "./defaults-for-type";

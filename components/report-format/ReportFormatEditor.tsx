@@ -245,6 +245,37 @@ export default function ReportFormatEditor({
               </p>
             </div>
           </>
+        ) : rubric.type === "trl" ? (
+          <>
+            <div className="rounded border border-amber-200 bg-amber-50/50 p-2 dark:border-amber-900/50 dark:bg-amber-950/20">
+              <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                <span className="font-medium text-gray-800 dark:text-gray-200">
+                  Evaluación TRL
+                </span>
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-medium text-amber-800 dark:bg-amber-900/60 dark:text-amber-200">
+                  Copia literal — paso 4
+                </span>
+              </div>
+              <p className="mb-2 text-[10px] leading-relaxed text-amber-900/90 dark:text-amber-200/90">
+                El informe inserta aquí el texto de la única evaluación TRL (análisis, nivel,
+                justificación y sugerencias), sin reformatear.
+              </p>
+              <textarea
+                className={`${inputClass} min-h-[72px] resize-y`}
+                value={synced.subdimensionEvalInstructions}
+                onChange={(e) =>
+                  onChange({ ...synced, subdimensionEvalInstructions: e.target.value })
+                }
+              />
+            </div>
+            <div className="rounded border border-gray-200 bg-white/60 p-2 dark:border-gray-600 dark:bg-gray-900/50">
+              <span className="font-medium">Nivel TRL (autoritativo)</span>
+              <p className="mt-1 text-[10px] text-gray-500">
+                Bloque determinista «Nivel TRL: N» generado automáticamente. No requiere
+                configuración.
+              </p>
+            </div>
+          </>
         ) : rubric.type === "niveles" && variableRows.length > 0 ? (
           <>
             <div className="rounded border border-amber-200 bg-amber-50/50 p-2 dark:border-amber-900/50 dark:bg-amber-950/20">

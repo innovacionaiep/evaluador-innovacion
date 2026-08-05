@@ -70,21 +70,19 @@ export const DEFAULT_EVAL_SYSTEM_FALLBACK =
 export const DEFAULT_VARIABLE_EVAL_USER_PROMPT = `Evalúa la variable/perspectiva "{{variable}}" del proyecto.
 
 Metodología:
-1. Interpreta los criterios de cada nivel para esta perspectiva ({{levelNumbers}}).
+1. Interpreta los criterios de cada subnivel para esta perspectiva ({{levelNumbers}}).
 2. Localiza en los elementos del proyecto la evidencia relevante para "{{variable}}".
-3. Con el marco teórico de {{knowledgeLabel}} (Knowledge), asigna el nivel y redacta análisis y justificación.
+3. Con el marco teórico de {{knowledgeLabel}} (Knowledge), asigna el subnivel y redacta análisis y justificación.
 
 Incluye obligatoriamente estas secciones (sin límite de caracteres; sé técnico y exhaustivo):
 1. **Análisis** — evaluación rigurosa del proyecto según los criterios de esta variable
-2. **Nivel asignado** — OBLIGATORIO:
-   - Una línea exacta con el formato: Nivel: N
-   - N debe ser uno de: {{levelNumbers}}
-3. **Justificación** — fundamentada en el Knowledge y la evidencia del proyecto
+2. **Justificación** — fundamentada en el Knowledge y la evidencia del proyecto
+3. **JSON de nota** — OBLIGATORIO al final de la respuesta, en una línea propia (sin markdown):
+{"nivel": N}
+donde N es uno de: {{levelNumbers}}
 
-La línea "Nivel: N" debe aparecer en su propia línea, después del Análisis y antes de la Justificación.
-{{phaseInstructions}}
-
-No uses etiquetas <think>. Responde solo con la evaluación de esta variable.`;
+No uses etiquetas <think>. Responde solo con la evaluación de esta variable y el JSON final.
+{{phaseInstructions}}`;
 
 export const DEFAULT_ASSIGN_LEVEL_USER_PROMPT = `Asigna UN ÚNICO nivel global al proyecto según la escala de niveles.
 
@@ -105,6 +103,40 @@ REGLAS:
 La línea "Nivel: N" debe estar en su propia línea.
 No uses etiquetas <think>.
 {{phaseInstructions}}`;
+
+/** Plantilla user evaluación TRL (única clasificación). Placeholders: {{mainScale}}, {{levelNumbers}}, {{knowledgeLabel}}, {{phaseInstructions}} */
+export const DEFAULT_TRL_EVAL_USER_PROMPT = `Clasifica el proyecto en UN ÚNICO nivel TRL según la escala de la rúbrica.
+
+Escala de niveles TRL:
+{{mainScale}}
+
+Metodología:
+1. Interpreta los criterios de cada nivel.
+2. Localiza en los elementos del proyecto la evidencia del estado de madurez tecnológica.
+3. Con el marco teórico de {{knowledgeLabel}} (Knowledge), elige el nivel que mejor describe el estado actual.
+
+Incluye obligatoriamente estas secciones (sin límite de caracteres; sé técnico y exhaustivo):
+1. **Análisis** — evaluación rigurosa del proyecto según los criterios de los niveles TRL
+2. **Nivel** — OBLIGATORIO e INNEGOCIABLE:
+   - Una línea exacta con el formato: Nivel: N
+   - N debe ser uno de: {{levelNumbers}} (número arábigo, no palabras)
+   - Prohibido omitir el nivel, usar rangos, decimales o frases como "nivel alto"
+3. **Justificación** — fundamentada en el Knowledge y la evidencia del proyecto; en español
+4. **Sugerencias de mejora** — propuestas concretas para avanzar hacia el siguiente nivel TRL
+
+La línea "Nivel: N" debe aparecer en su propia línea, después del Análisis y antes de la Justificación.
+Ejemplo válido:
+**Análisis**
+(texto del análisis)
+
+Nivel: 4
+
+**Justificación**
+(texto en español)
+
+{{phaseInstructions}}
+
+No uses etiquetas <think>. Responde solo con la evaluación TRL del proyecto.`;
 
 export const DEFAULT_GLOBAL_LEVEL_USER_PROMPT = `Con las evaluaciones por variable, asigna UN ÚNICO nivel global al proyecto.
 

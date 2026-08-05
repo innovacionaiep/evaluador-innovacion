@@ -5,6 +5,7 @@ import {
   buildFormatUserPrompt,
   defaultReportFormatPonderaciones,
   defaultReportFormatNiveles,
+  defaultReportFormatTrl,
   enrichReportFormatWithLegacySections,
   expandReportSections,
   estimateFormatReportMaxTokens,
@@ -67,6 +68,19 @@ describe("report-format-config", () => {
       fmt
     );
     assert.ok(expanded.some((s) => s.kind === "assigned_level"));
+  });
+
+  it("plantilla TRL incluye resumen, evaluación verbatim, nivel y síntesis", () => {
+    const fmt = defaultReportFormatTrl();
+    const rubric = {
+      type: "trl" as const,
+      levels: [{ id: "t3", level: 3, title: "TRL 3", description: "Prueba" }],
+    };
+    const expanded = expandReportSections(rubric, fmt);
+    assert.ok(expanded.some((s) => s.kind === "custom" && /Resumen/i.test(s.title)));
+    assert.ok(expanded.some((s) => s.kind === "trl_eval"));
+    assert.ok(expanded.some((s) => s.kind === "trl_level"));
+    assert.ok(expanded.some((s) => s.kind === "custom" && /Síntesis/i.test(s.title)));
   });
 
   it("síntesis solo si el usuario añade sección custom", () => {

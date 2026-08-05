@@ -11,9 +11,15 @@ import {
   resolveParamsForUseCase,
 } from "@/lib/llm-config-server";
 import type { LlmUseCase } from "@/lib/llm-config-types";
+import { EMBEDDING_MAX_INPUT_CHARS } from "@/lib/chunking";
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
-const EMBEDDING_BATCH_SIZE = 16;
+/** Lotes pequeños: algunos providers aplican el límite 8192 al batch completo. */
+const EMBEDDING_BATCH_SIZE = 4;
+/** Lotes en paralelo para acortar reindex (Manual OSLO ~1500 chunks). */
+const EMBEDDING_CONCURRENCY = 4;
+
+export type EmbedProgress = { done: number; total: number };
 
 export type OpenRouterCallOptions = {
   temperature?: number;
@@ -475,24 +481,66 @@ type EmbeddingResponse = {
   data?: { index: number; embedding: number[] }[];
 };
 
+function isEmbeddingTokenLimitError(message: string): boolean {
+  return /exceeds maximum allowed token|maximum context length|token size/i.test(message);
+}
+
+function clampEmbeddingInput(text: string, maxChars: number): string {
+  const trimmed = text?.trim() || " ";
+  return trimmed.length > maxChars ? trimmed.slice(0, maxChars) : trimmed;
+}
+
+export type EmbeddingInputType = "search_query" | "search_document";
+
+function isEmbeddingInputTypeError(message: string): boolean {
+  return /input_type/i.test(message) && /asymmetric|required/i.test(message);
+}
+
 /** Generate embeddings for one or more texts (RAG indexing and retrieval). */
 export async function createEmbeddings(
   input: string[],
-  options?: { model?: string; useCase?: LlmUseCase }
+  options?: {
+    model?: string;
+    useCase?: LlmUseCase;
+    /** Obligatorio en modelos asimétricos (p. ej. NVIDIA embedqa vía OpenRouter). */
+    inputType?: EmbeddingInputType;
+  }
 ): Promise<number[][]> {
   if (input.length === 0) return [];
   const useCase = options?.useCase ?? "embeddings";
+  const inputType = options?.inputType ?? "search_document";
 
   return runWithRetries(
     useCase,
     async (model, apiKey) => {
+      const body: Record<string, unknown> = { model, input, input_type: inputType };
       const res = await fetch(`${OPENROUTER_BASE}/embeddings`, {
         method: "POST",
         headers: openRouterHeaders(apiKey),
-        body: JSON.stringify({ model, input }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const errBody = await res.text();
+        // Algunos providers solo aceptan query/passage; reintentar con alias comunes.
+        if (isEmbeddingInputTypeError(errBody) || /input_type/i.test(errBody)) {
+          const alt =
+            inputType === "search_query"
+              ? (["query", "search_query"] as const)
+              : (["passage", "document", "search_document"] as const);
+          for (const altType of alt) {
+            if (altType === inputType) continue;
+            const retry = await fetch(`${OPENROUTER_BASE}/embeddings`, {
+              method: "POST",
+              headers: openRouterHeaders(apiKey),
+              body: JSON.stringify({ model, input, input_type: altType }),
+            });
+            if (retry.ok) {
+              const data = (await retry.json()) as EmbeddingResponse;
+              const rows = (data.data ?? []).slice().sort((a, b) => a.index - b.index);
+              return rows.map((row) => row.embedding ?? []);
+            }
+          }
+        }
         throw new Error(`${res.status} ${errBody}`);
       }
       const data = (await res.json()) as EmbeddingResponse;
@@ -503,21 +551,75 @@ export async function createEmbeddings(
   );
 }
 
-/** Batch embeddings for RAG (chunk indexing). */
-export async function embedTexts(texts: string[]): Promise<number[][]> {
-  if (texts.length === 0) return [];
-  const results: number[][] = [];
-  for (let i = 0; i < texts.length; i += EMBEDDING_BATCH_SIZE) {
-    const batch = texts.slice(i, i + EMBEDDING_BATCH_SIZE).map((t) => t?.trim() || " ");
-    const vectors = await createEmbeddings(batch);
-    results.push(...vectors);
+/**
+ * Embeddings en lotes paralelos. Si el proveedor rechaza por tokens (límite 8192),
+ * reintenta de a uno y con truncado más agresivo.
+ */
+export async function embedTexts(
+  texts: string[],
+  options?: {
+    onProgress?: (p: EmbedProgress) => void;
+    inputType?: EmbeddingInputType;
   }
-  return results;
+): Promise<number[][]> {
+  if (texts.length === 0) return [];
+  const inputType = options?.inputType ?? "search_document";
+
+  async function embedBatch(batch: string[], maxChars: number): Promise<number[][]> {
+    const clamped = batch.map((t) => clampEmbeddingInput(t, maxChars));
+    try {
+      return await createEmbeddings(clamped, { inputType });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!isEmbeddingTokenLimitError(msg)) throw err;
+
+      // Batch demasiado grande para el provider → uno a uno
+      if (clamped.length > 1) {
+        const out: number[][] = [];
+        for (const item of clamped) {
+          const [vec] = await embedBatch([item], maxChars);
+          out.push(vec ?? []);
+        }
+        return out;
+      }
+
+      // Un solo texto aún excede → truncar más
+      const nextMax = Math.max(800, Math.floor(maxChars * 0.6));
+      if (nextMax >= maxChars) throw err;
+      return embedBatch(clamped, nextMax);
+    }
+  }
+
+  const batches: string[][] = [];
+  for (let i = 0; i < texts.length; i += EMBEDDING_BATCH_SIZE) {
+    batches.push(texts.slice(i, i + EMBEDDING_BATCH_SIZE));
+  }
+
+  const batchResults: number[][][] = new Array(batches.length);
+  let cursor = 0;
+  let doneCount = 0;
+
+  async function worker() {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= batches.length) return;
+      const batch = batches[idx]!;
+      batchResults[idx] = await embedBatch(batch, EMBEDDING_MAX_INPUT_CHARS);
+      doneCount += batch.length;
+      options?.onProgress?.({ done: doneCount, total: texts.length });
+    }
+  }
+
+  const workers = Math.min(EMBEDDING_CONCURRENCY, batches.length);
+  await Promise.all(Array.from({ length: workers }, () => worker()));
+  return batchResults.flat();
 }
 
 /** Single-query embedding for RAG retrieval. */
 export async function embedQuery(query: string): Promise<number[]> {
-  const vectors = await embedTexts([query.trim() || " "]);
+  const vectors = await embedTexts([query.trim() || " "], {
+    inputType: "search_query",
+  });
   return vectors[0] ?? [];
 }
 

@@ -20,6 +20,10 @@ const METHOD_BADGE: Record<ReportAssemblySequenceStep["method"], string> = {
     "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200",
   verbatim_assigned_level:
     "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200",
+  verbatim_trl_eval:
+    "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200",
+  deterministic_trl_level:
+    "bg-sky-100 text-sky-800 dark:bg-sky-950/50 dark:text-sky-200",
   llm_synthesis: "bg-indigo-100 text-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-200",
 };
 

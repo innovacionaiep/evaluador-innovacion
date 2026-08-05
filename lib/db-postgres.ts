@@ -16,7 +16,7 @@ import {
   emptyLlmParams,
   type LlmUseCaseParams,
 } from "./llm-config-types";
-import { mergeRubricConfig, type RubricConfig } from "./rubric-config";
+import { mergeRubricConfig, type RubricConfig, TRL_LEVEL_SCORE_KEY, TRL_LEVEL_SCORE_NAME } from "./rubric-config";
 import { mergeReportFormatConfig, type ReportFormatConfig } from "./report-format-config";
 import {
   buildEvaluationConfigFromLegacy,
@@ -25,6 +25,7 @@ import {
   type EvaluationConfig,
 } from "./evaluation-config";
 import type { RubricScoreSchemaEntry } from "./evaluation-scores";
+import { isTrl } from "@/lib/eval-types/constants";
 
 export type ConfigUpdateData = {
   knowledge_paths?: (string | { name: string; url: string })[];
@@ -391,6 +392,8 @@ export async function createEvaluationTypePostgres(name: string): Promise<number
   const sql = getSql();
   const typeName = name.trim() || "IGIP";
   const { defaultsForType } = await import("@/lib/eval-types/defaults-for-type");
+  const { isTrl } = await import("@/lib/eval-types/constants");
+  const { trlDefaultElements } = await import("@/lib/eval-types/trl");
   const defs = defaultsForType(typeName);
   const rubric = defs.rubric;
   const reportFormat = defs.reportFormat;
@@ -404,6 +407,48 @@ export async function createEvaluationTypePostgres(name: string): Promise<number
     },
     typeName
   );
+  let seedElements: { title: string; description: string; section: string }[] = [];
+  if (isTrl(typeName)) {
+    // Preferir elementos vivos de IGIP; fallback al fixture ampliado.
+    const existingTypes = (await sql`SELECT id, name FROM evaluation_types`) as unknown as {
+      id: number;
+      name: string;
+    }[];
+    const igipRow = existingTypes.find((t) => /igip/i.test(t.name));
+    if (igipRow) {
+      const cfgRows = (await sql`
+        SELECT elements FROM evaluation_type_config WHERE evaluation_type_id = ${igipRow.id}
+      `) as unknown as { elements: unknown }[];
+      const raw = cfgRows[0]?.elements;
+      const parsed =
+        typeof raw === "string"
+          ? (() => {
+              try {
+                return JSON.parse(raw);
+              } catch {
+                return [];
+              }
+            })()
+          : raw;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        seedElements = parsed
+          .map((e) => parseElementDefConfig(e))
+          .filter((e): e is NonNullable<typeof e> => e != null)
+          .map((e) => ({
+            title: e.title,
+            description: e.description ?? "",
+            section: e.section ?? "",
+          }));
+      }
+    }
+    if (seedElements.length === 0) {
+      seedElements = trlDefaultElements().map((e) => ({
+        title: e.title,
+        description: e.description,
+        section: e.section ?? "",
+      }));
+    }
+  }
   const rows = (await sql`INSERT INTO evaluation_types (name) VALUES (${typeName}) RETURNING id`) as unknown as {
     id: unknown;
   }[];
@@ -414,7 +459,9 @@ export async function createEvaluationTypePostgres(name: string): Promise<number
       rubric_config, report_format_config, evaluation_config,
       pipeline_config, rag_config, extract_config
     ) VALUES (
-      ${id}, '[]', '', '',
+      ${id},
+      ${sql.json(seedElements)},
+      '', '',
       ${sql.json(rubric)},
       ${sql.json(reportFormat)},
       ${sql.json(evaluationConfig)},
@@ -625,19 +672,50 @@ export async function createEvaluationHistoryPostgres(
 }
 
 export async function listEvaluationHistoryPostgres(
-  limit = 100
+  limit = 100,
+  options?: { typeName?: string | null }
 ): Promise<EvaluationHistoryListItem[]> {
   await ensureDb();
   const sql = getSql();
   const safeLimit = Math.min(Math.max(1, limit), 500);
-  const rows = (await sql`
-    SELECT
-      id, evaluation_type_id, evaluation_type_name, project_name, file_name,
-      subdimension_scores, overall_score, summary, score_schema, created_at
-    FROM evaluation_history
-    ORDER BY created_at DESC
-    LIMIT ${safeLimit}
-  `) as unknown as {
+  const typeFilter = (options?.typeName ?? "").trim();
+
+  const rows = (
+    typeFilter
+      ? await sql`
+          SELECT
+            id, evaluation_type_id, evaluation_type_name, project_name, file_name,
+            subdimension_scores, overall_score, summary, score_schema, created_at,
+            CASE
+              WHEN report_content IS NULL OR length(report_content) = 0 THEN NULL
+              WHEN report_content ~* 'Nivel[[:space:]]+TRL[[:space:]]*:[[:space:]]*[0-9]+' THEN
+                (substring(report_content from '(?i)Nivel[[:space:]]+TRL[[:space:]]*:[[:space:]]*([0-9]+)'))::double precision
+              WHEN report_content ~* 'Nivel[[:space:]]*:[[:space:]]*[0-9]+' THEN
+                (substring(report_content from '(?i)Nivel[[:space:]]*:[[:space:]]*([0-9]+)'))::double precision
+              ELSE NULL
+            END AS recovered_trl_level
+          FROM evaluation_history
+          WHERE upper(evaluation_type_name) LIKE ${"%" + typeFilter.toUpperCase() + "%"}
+          ORDER BY created_at DESC
+          LIMIT ${safeLimit}
+        `
+      : await sql`
+          SELECT
+            id, evaluation_type_id, evaluation_type_name, project_name, file_name,
+            subdimension_scores, overall_score, summary, score_schema, created_at,
+            CASE
+              WHEN report_content IS NULL OR length(report_content) = 0 THEN NULL
+              WHEN report_content ~* 'Nivel[[:space:]]+TRL[[:space:]]*:[[:space:]]*[0-9]+' THEN
+                (substring(report_content from '(?i)Nivel[[:space:]]+TRL[[:space:]]*:[[:space:]]*([0-9]+)'))::double precision
+              WHEN report_content ~* 'Nivel[[:space:]]*:[[:space:]]*[0-9]+' THEN
+                (substring(report_content from '(?i)Nivel[[:space:]]*:[[:space:]]*([0-9]+)'))::double precision
+              ELSE NULL
+            END AS recovered_trl_level
+          FROM evaluation_history
+          ORDER BY created_at DESC
+          LIMIT ${safeLimit}
+        `
+  ) as unknown as {
     id: number;
     evaluation_type_id: number | null;
     evaluation_type_name: string;
@@ -648,20 +726,52 @@ export async function listEvaluationHistoryPostgres(
     summary: string | null;
     score_schema: unknown;
     created_at: Date | string;
+    recovered_trl_level: number | null;
   }[];
-  return rows.map((r) => ({
-    id: r.id,
-    evaluation_type_id: r.evaluation_type_id,
-    evaluation_type_name: r.evaluation_type_name,
-    project_name: r.project_name,
-    file_name: r.file_name ?? "",
-    subdimension_scores: parseScoresJson(r.subdimension_scores),
-    overall_score: r.overall_score,
-    summary: r.summary ?? "",
-    score_schema: parseSchemaJson(r.score_schema),
-    created_at:
-      typeof r.created_at === "string" ? r.created_at : r.created_at.toISOString(),
-  }));
+  return rows.map((r) => {
+    let scores = parseScoresJson(r.subdimension_scores);
+    let overall = r.overall_score;
+    let schema = parseSchemaJson(r.score_schema);
+    if (
+      isTrl(r.evaluation_type_name) &&
+      overall == null &&
+      r.recovered_trl_level != null &&
+      Number.isFinite(Number(r.recovered_trl_level))
+    ) {
+      overall = Number(r.recovered_trl_level);
+      scores = { ...scores, [TRL_LEVEL_SCORE_KEY]: overall };
+      if (!schema.some((e) => e.key === TRL_LEVEL_SCORE_KEY)) {
+        schema = [
+          {
+            dimension: "TRL",
+            name: TRL_LEVEL_SCORE_NAME,
+            weight: null,
+            key: TRL_LEVEL_SCORE_KEY,
+          },
+          ...schema,
+        ];
+      }
+    } else if (
+      isTrl(r.evaluation_type_name) &&
+      overall != null &&
+      scores[TRL_LEVEL_SCORE_KEY] == null
+    ) {
+      scores = { ...scores, [TRL_LEVEL_SCORE_KEY]: overall };
+    }
+    return {
+      id: r.id,
+      evaluation_type_id: r.evaluation_type_id,
+      evaluation_type_name: r.evaluation_type_name,
+      project_name: r.project_name,
+      file_name: r.file_name ?? "",
+      subdimension_scores: scores,
+      overall_score: overall,
+      summary: r.summary ?? "",
+      score_schema: schema,
+      created_at:
+        typeof r.created_at === "string" ? r.created_at : r.created_at.toISOString(),
+    };
+  });
 }
 
 export async function getEvaluationHistoryByIdPostgres(
@@ -691,6 +801,30 @@ export async function getEvaluationHistoryByIdPostgres(
   }[];
   if (rows.length === 0) return null;
   const r = rows[0];
+  let scores = parseScoresJson(r.subdimension_scores);
+  let overall = r.overall_score;
+  let schema = parseSchemaJson(r.score_schema);
+  if (isTrl(r.evaluation_type_name)) {
+    const { ensureTrlScoresFromText } = await import("@/lib/trl-score-recover");
+    const recovered = ensureTrlScoresFromText({
+      reportOrDraft: r.report_content ?? "",
+      subdimensionScores: scores,
+      overallScore: overall,
+    });
+    scores = recovered.subdimensionScores;
+    overall = recovered.overallScore;
+    if (!schema.some((e) => e.key === TRL_LEVEL_SCORE_KEY)) {
+      schema = [
+        {
+          dimension: "TRL",
+          name: TRL_LEVEL_SCORE_NAME,
+          weight: null,
+          key: TRL_LEVEL_SCORE_KEY,
+        },
+        ...schema,
+      ];
+    }
+  }
   return {
     id: r.id,
     evaluation_type_id: r.evaluation_type_id,
@@ -698,10 +832,10 @@ export async function getEvaluationHistoryByIdPostgres(
     project_name: r.project_name,
     file_name: r.file_name ?? "",
     report_content: r.report_content,
-    subdimension_scores: parseScoresJson(r.subdimension_scores),
-    overall_score: r.overall_score,
+    subdimension_scores: scores,
+    overall_score: overall,
     summary: r.summary ?? "",
-    score_schema: parseSchemaJson(r.score_schema),
+    score_schema: schema,
     created_at:
       typeof r.created_at === "string" ? r.created_at : r.created_at.toISOString(),
   };

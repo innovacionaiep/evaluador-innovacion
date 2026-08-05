@@ -46,6 +46,8 @@ export type AssembleFormattedReportOptions = {
   projectElementsTable: { element: string; content: string }[];
   evaluation: EvaluationConfig;
   formatInstructionsExtra?: string;
+  /** Si hay notas de variables, sustituye el bloque assigned_level por este markdown. */
+  scoresSectionMarkdown?: string | null;
   semaphore?: EvaluateLlmSemaphore;
   streamSection?: (
     messages: { role: "system" | "user" | "assistant"; content: string }[],
@@ -562,8 +564,26 @@ export async function* assembleFormattedReport(
       continue;
     }
 
+    if (section.kind === "trl_eval") {
+      const body = rawEvaluation.trim() || "(Sin evaluación TRL)";
+      yield prefix() + `## ${section.title}\n\n${body}`;
+      continue;
+    }
+
+    if (section.kind === "trl_level") {
+      const markdown =
+        options.scoresSectionMarkdown?.trim() ||
+        `**Nivel TRL**\n\nNivel TRL: —`;
+      yield prefix() + `## ${section.title}\n\n${markdown}`;
+      continue;
+    }
+
     if (section.kind === "assigned_level") {
-      yield prefix() + formatAssignedLevelBlock(section, rawEvaluation);
+      if (options.scoresSectionMarkdown?.trim()) {
+        yield prefix() + `## ${section.title}\n\n${options.scoresSectionMarkdown.trim()}`;
+      } else {
+        yield prefix() + formatAssignedLevelBlock(section, rawEvaluation);
+      }
       continue;
     }
 

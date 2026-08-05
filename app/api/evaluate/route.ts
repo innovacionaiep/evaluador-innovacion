@@ -4,6 +4,7 @@ import { loadBulkEvaluationConfig } from "@/lib/bulk-evaluation-config-server";
 import { configureGlobalLlmSemaphore } from "@/lib/evaluate-concurrency";
 import { runEvaluatePipeline } from "@/lib/evaluate-pipeline";
 import { runEvaluateLevelsPipeline } from "@/lib/evaluate-levels-pipeline";
+import { runEvaluateTrlPipeline } from "@/lib/evaluate-trl-pipeline";
 import { assertLlmModelsConfigured } from "@/lib/llm-config-server";
 import { isRubricConfigValid, mergeRubricConfig } from "@/lib/rubric-config";
 import { mergeReportFormatConfig, isReportFormatValid } from "@/lib/report-format-config";
@@ -11,6 +12,22 @@ import type { RetrievedChunk } from "@/lib/chunk-types";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
+
+function evaluatePipelineForRubric(
+  rubric: ReturnType<typeof mergeRubricConfig>,
+  evaluationTypeId: number,
+  projectElementsTable: { element: string; content: string }[],
+  precomputedSubdimensionChunks?: Record<string, RetrievedChunk[]>
+) {
+  const opts = { precomputedSubdimensionChunks };
+  if (rubric.type === "trl") {
+    return runEvaluateTrlPipeline(evaluationTypeId, projectElementsTable, opts);
+  }
+  if (rubric.type === "niveles") {
+    return runEvaluateLevelsPipeline(evaluationTypeId, projectElementsTable, opts);
+  }
+  return runEvaluatePipeline(evaluationTypeId, projectElementsTable, opts);
+}
 
 export async function POST(request: Request) {
   try {
@@ -83,14 +100,12 @@ export async function POST(request: Request) {
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          for await (const event of
-            rubric.type === "niveles"
-              ? runEvaluateLevelsPipeline(evaluationTypeId, projectElementsTable, {
-                  precomputedSubdimensionChunks,
-                })
-              : runEvaluatePipeline(evaluationTypeId, projectElementsTable, {
-                  precomputedSubdimensionChunks,
-                })) {
+          for await (const event of evaluatePipelineForRubric(
+            rubric,
+            evaluationTypeId,
+            projectElementsTable,
+            precomputedSubdimensionChunks
+          )) {
             controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
           }
         } catch (err) {

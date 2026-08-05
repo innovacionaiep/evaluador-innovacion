@@ -1,10 +1,33 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { buildPrecomputedChunksForEvaluation } from "@/lib/evaluate-client-rag";
+import {
+  buildPrecomputedChunksForEvaluation,
+  skipsClientKnowledgePrecompute,
+} from "@/lib/evaluate-client-rag";
 import type { StoredChunk } from "@/lib/chunk-types";
 
 describe("evaluate-client-rag", () => {
+  it("TRL no omite el precomputo de Knowledge local", () => {
+    assert.equal(
+      skipsClientKnowledgePrecompute({
+        rubricType: "trl",
+        subdimensions: [
+          {
+            key: "trl:nivel",
+            dimension: "TRL",
+            name: "Nivel TRL",
+            rubricContent: "Nivel 1",
+          },
+        ],
+        ragEvaluate: { topK: 8, maxRetrievedChars: 12_000 },
+        knowledgeReferenceLabel: "Knowledge",
+        projectElementsInRagQuery: 6,
+      }),
+      false
+    );
+  });
+
   it("no precomputa subdimensiones para rúbrica por niveles", async () => {
     const chunks: StoredChunk[] = [
       {

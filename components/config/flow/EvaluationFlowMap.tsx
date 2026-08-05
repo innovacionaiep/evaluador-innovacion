@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { IGIP_FLOW_STEPS, type FlowConfigActionId, type IgipFlowStep } from "@/lib/eval-flow/igip-flow-definition";
 import { IMET_FLOW_STEPS } from "@/lib/eval-flow/imet-flow-definition";
+import { TRL_FLOW_STEPS } from "@/lib/eval-flow/trl-flow-definition";
 import type { FixedEvalTypeKey } from "@/lib/eval-types/constants";
 import type { IgipFlowPromptChainsResponse } from "@/lib/eval-flow/igip-prompt-chains-types";
 import { FlowStepCard } from "./FlowStepCard";
@@ -25,6 +26,12 @@ const FLOW_META: Record<
     apiSegment: "imet-flow-prompts",
     title: "Mapa del proceso IMET",
     ariaLabel: "Pasos principales del proceso IMET",
+  },
+  TRL: {
+    steps: TRL_FLOW_STEPS,
+    apiSegment: "trl-flow-prompts",
+    title: "Mapa del proceso TRL",
+    ariaLabel: "Pasos principales del proceso TRL",
   },
 };
 

@@ -10,6 +10,8 @@ import {
 import type { EvaluationConfig } from "@/lib/evaluation-config";
 import {
   backfillSubdimensionScores,
+  buildAuthoritativeScoresSection,
+  buildAuthoritativeTrlLevelSection,
   buildEvaluationInputForSummary,
   computeWeightedIndicatorScore,
   finalizeEvaluationSummary,
@@ -30,9 +32,12 @@ import {
 import { stripCharacterLimitAnnotations } from "@/lib/report-format-limits";
 import {
   buildRubricScoreSchemaFromConfig,
+  TRL_LEVEL_SCORE_KEY,
   type RubricConfig,
   type RubricConfigPonderaciones,
+  type RubricConfigTrl,
 } from "@/lib/rubric-config";
+import { parseAssignedLevel } from "@/lib/rubric-niveles";
 import { FALLBACK_SUMMARY_SYSTEM_PROMPT } from "@/lib/system-prompts-catalog";
 
 export type AssembleFinalReportResult = {
@@ -417,6 +422,8 @@ type AssembleNivelesParams = {
   evaluation: EvaluationConfig;
   assignedLevel: number | null;
   levelTitle: string;
+  subdimensionScores?: Record<string, number | null>;
+  overallScore?: number | null;
   semaphore?: EvaluateLlmSemaphore;
   onStep?: (message: string) => void;
   telemetry?: FormatReportTelemetry;
@@ -449,6 +456,20 @@ export async function* assembleFinalNivelesReportEvents(
     levelTitle,
   } = params;
 
+  const scoreSchema = buildRubricScoreSchemaFromConfig(rubric);
+  const subdimensionScores = params.subdimensionScores ?? {};
+  const overallScore = params.overallScore ?? null;
+  const indicatorLabel = evaluation.indicatorLabel || "IMET";
+  const scoresSectionMarkdown =
+    scoreSchema.length > 0
+      ? buildAuthoritativeScoresSection(
+          scoreSchema,
+          subdimensionScores,
+          overallScore,
+          indicatorLabel
+        )
+      : null;
+
   const custom = [
     evaluation.prompts.formatSystem?.trim(),
     evaluation.prompts.formatInstructions?.trim(),
@@ -472,9 +493,9 @@ export async function* assembleFinalNivelesReportEvents(
         rubric,
         evaluation,
         rawEvaluation,
-        scoreSchema: [],
-        subdimensionScores: {},
-        overallScore: null,
+        scoreSchema,
+        subdimensionScores,
+        overallScore,
         assignedLevel,
         levelTitle,
         semaphore: formatSemaphore,
@@ -491,6 +512,7 @@ export async function* assembleFinalNivelesReportEvents(
       projectElementsTable,
       evaluation,
       formatInstructionsExtra: custom || undefined,
+      scoresSectionMarkdown,
       semaphore: formatSemaphore,
       onStep: pushStep,
       telemetry,
@@ -531,6 +553,178 @@ export async function assembleFinalNivelesReport(
 ): Promise<{ finalReport: string; evaluationSummary: string }> {
   let result: { finalReport: string; evaluationSummary: string } | undefined;
   for await (const event of assembleFinalNivelesReportEvents(params)) {
+    if (event.type === "result") result = event.result;
+  }
+  if (!result) {
+    throw new Error("El ensamblado del informe no produjo resultado.");
+  }
+  return result;
+}
+
+type AssembleTrlParams = {
+  rubric: RubricConfigTrl;
+  reportFormat: ReportFormatConfig;
+  rawEvaluation: string;
+  projectElementsTable: { element: string; content: string }[];
+  evaluation: EvaluationConfig;
+  assignedLevel: number | null;
+  levelTitle: string;
+  subdimensionScores?: Record<string, number | null>;
+  overallScore?: number | null;
+  semaphore?: EvaluateLlmSemaphore;
+  onStep?: (message: string) => void;
+  telemetry?: FormatReportTelemetry;
+};
+
+export type AssembleFinalTrlReportEvent =
+  | { type: "step"; message: string }
+  | {
+      type: "result";
+      result: {
+        finalReport: string;
+        evaluationSummary: string;
+        assignedLevel: number | null;
+        overallScore: number | null;
+        subdimensionScores: Record<string, number | null>;
+      };
+    };
+
+/**
+ * Ensambla informe TRL: resumen LLM, evaluación verbatim, Nivel TRL:N, síntesis LLM.
+ */
+export async function* assembleFinalTrlReportEvents(
+  params: AssembleTrlParams
+): AsyncGenerator<AssembleFinalTrlReportEvent> {
+  const emit = (message: string) => {
+    params.onStep?.(message);
+    return { type: "step" as const, message };
+  };
+
+  const totalStarted = Date.now();
+  const telemetry = params.telemetry ?? createFormatReportTelemetry();
+  const llmCount = countFormatLlmSections(params.rubric, params.reportFormat);
+  const formatSemaphore = params.semaphore ?? createFormatLlmSemaphore(llmCount);
+
+  const {
+    rubric,
+    reportFormat,
+    rawEvaluation,
+    projectElementsTable,
+    evaluation,
+    levelTitle,
+  } = params;
+
+  const levelNums = rubric.levels.map((l) => l.level);
+  let assignedLevel = params.assignedLevel;
+  if (assignedLevel == null) {
+    assignedLevel = parseAssignedLevel(rawEvaluation, levelNums);
+  }
+  const resolvedLevelTitle =
+    levelTitle ||
+    rubric.levels.find((l) => l.level === assignedLevel)?.title ||
+    "";
+
+  const scoreSchema = buildRubricScoreSchemaFromConfig(rubric);
+  const subdimensionScores = {
+    ...(params.subdimensionScores ?? {}),
+    ...(assignedLevel != null ? { [TRL_LEVEL_SCORE_KEY]: assignedLevel } : {}),
+  };
+  const overallScore = params.overallScore ?? assignedLevel;
+  const scoresSectionMarkdown = buildAuthoritativeTrlLevelSection(assignedLevel);
+
+  const custom = [
+    evaluation.prompts.formatSystem?.trim(),
+    evaluation.prompts.formatInstructions?.trim(),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const synthesisMax = getSynthesisMaxChars(reportFormat, rubric);
+  const synSection = findCustomSectionByTitlePattern(reportFormat, /síntesis|sintesis/i);
+  const hasSynthesis = synthesisMax != null && synthesisMax > 0 && synSection;
+
+  const bridge = createStepBridge(params.onStep);
+  const pushStep = bridge.push;
+
+  const sectionLabel =
+    llmCount === 1 ? "1 sección con IA" : `${llmCount} secciones con IA`;
+  yield emit(`Informe final: redactando ${sectionLabel}…`);
+
+  const synthesisPromise = hasSynthesis
+    ? generateFinalSynthesisSection({
+        synSection: synSection!,
+        rubric,
+        evaluation,
+        rawEvaluation,
+        scoreSchema,
+        subdimensionScores,
+        overallScore,
+        assignedLevel,
+        levelTitle: resolvedLevelTitle,
+        semaphore: formatSemaphore,
+        onStep: pushStep,
+        telemetry,
+      })
+    : null;
+
+  const assembled = yield* yieldStepsWhileAwaiting(
+    collectAssembledReport({
+      rubric,
+      reportFormat,
+      rawEvaluation,
+      projectElementsTable,
+      evaluation,
+      formatInstructionsExtra: custom || undefined,
+      scoresSectionMarkdown,
+      semaphore: formatSemaphore,
+      onStep: pushStep,
+      telemetry,
+    }),
+    bridge,
+    emit
+  );
+
+  let sanitized = stripCharacterLimitAnnotations(assembled);
+  let evaluationSummary = "";
+
+  if (synthesisPromise) {
+    evaluationSummary = yield* yieldStepsWhileAwaiting(synthesisPromise, bridge, emit);
+    sanitized = `${sanitized.trimEnd()}\n\n${evaluationSummary.trim()}`;
+  }
+
+  telemetry.recordPhase({ phase: "total", ms: Date.now() - totalStarted });
+  telemetry.logSummary("trl");
+
+  yield {
+    type: "result",
+    result: {
+      finalReport: sanitized,
+      evaluationSummary: evaluationSummary.replace(/^##\s*[^\n]+\n+/, "").trim(),
+      assignedLevel,
+      overallScore: overallScore ?? assignedLevel,
+      subdimensionScores,
+    },
+  };
+}
+
+export async function assembleFinalTrlReport(
+  params: AssembleTrlParams
+): Promise<{
+  finalReport: string;
+  evaluationSummary: string;
+  assignedLevel: number | null;
+  overallScore: number | null;
+  subdimensionScores: Record<string, number | null>;
+}> {
+  let result:
+    | {
+        finalReport: string;
+        evaluationSummary: string;
+        assignedLevel: number | null;
+        overallScore: number | null;
+        subdimensionScores: Record<string, number | null>;
+      }
+    | undefined;
+  for await (const event of assembleFinalTrlReportEvents(params)) {
     if (event.type === "result") result = event.result;
   }
   if (!result) {

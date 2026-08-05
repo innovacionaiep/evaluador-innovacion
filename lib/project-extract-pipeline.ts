@@ -14,10 +14,11 @@ import {
   findDuplicateContentGroups,
 } from "@/lib/extract-duplicate-guard";
 import { looksLikeContinuityAnswer } from "@/lib/extract-content-clean";
-import { isFactorInnovadorElement } from "@/lib/form-row-extract";
+import { isEscalabilidadElement, isFactorInnovadorElement } from "@/lib/form-row-extract";
+import { isTrl } from "@/lib/eval-types/constants";
 import { loadProjectStructuredIndex } from "@/lib/project-structured-index";
 import { projectIndexMatches } from "@/lib/project-vector-store";
-import { markIncompleteRows } from "@/lib/project-extract-validate";
+import { isIncompleteElement, markIncompleteRows } from "@/lib/project-extract-validate";
 import type { ProjectStructuredData } from "@/lib/build-context";
 import { setExtractRunContext } from "@/lib/extract-run-context";
 
@@ -214,21 +215,52 @@ export async function* runExtractPipeline(
         const others = group.titles.filter((t) => t !== title);
         const hint = buildDuplicateRetryHint(title, others, group.sharedContent, extractConfig?.duplicateGuard);
 
+        const row = byElement.get(title);
+        if (!row) continue;
+
+        // TRL Escalabilidad: si el Excel pegó el mismo texto que Factor innovador,
+        // el reintento LLM suele devolver vacío. Conservamos la fila etiquetada
+        // Escalabilidad y solo reemplazamos si el reintento aporta respuesta usable distinta.
+        const escalabilidadTrlGuard =
+          isTrl(evaluationTypeName) && isEscalabilidadElement(def);
+
         yield { type: "step", message: `Revisando duplicado: ${title}…` };
 
+        const prior = row.content;
         const { content, method } = await extractElementHybrid(sessionId, def, {
           timeoutMs: elementTimeoutMs,
-          extraHints: hint,
-          skipDeterministic: true,
+          extraHints: escalabilidadTrlGuard
+            ? `${hint}\n\nPara Escalabilidad: usa la respuesta de la fila etiquetada "Escalabilidad" aunque coincida con otro campo; no devuelvas vacío si esa celda tiene texto.`
+            : hint,
+          skipDeterministic: escalabilidadTrlGuard ? false : true,
           extractConfig,
           evaluationTypeName,
         });
 
-        const row = byElement.get(title);
-        if (row) {
-          row.content = content;
-          yield { type: "element", name: title, method: `${method}:dup_retry` };
+        if (escalabilidadTrlGuard) {
+          const usable =
+            content.trim().length > 20 &&
+            !isIncompleteElement(def, content) &&
+            content.trim() !== group.sharedContent.trim();
+          if (usable) {
+            row.content = content;
+            yield { type: "element", name: title, method: `${method}:dup_retry` };
+          } else if (prior.trim()) {
+            // Mantener extracción determinista de la fila Escalabilidad
+            yield {
+              type: "element",
+              name: title,
+              method: `${method}:escalabilidad_keep`,
+            };
+          } else if (content.trim()) {
+            row.content = content;
+            yield { type: "element", name: title, method: `${method}:dup_retry` };
+          }
+          continue;
         }
+
+        row.content = content;
+        yield { type: "element", name: title, method: `${method}:dup_retry` };
       }
     }
 

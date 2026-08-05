@@ -1,5 +1,10 @@
 import { parseReportFormatLimits } from "@/lib/report-format-limits";
-import type { RubricConfig, RubricConfigNiveles, RubricConfigPonderaciones } from "@/lib/rubric-config";
+import type {
+  RubricConfig,
+  RubricConfigNiveles,
+  RubricConfigPonderaciones,
+  RubricConfigTrl,
+} from "@/lib/rubric-config";
 import { hasRubricVariables } from "@/lib/rubric-niveles";
 import { EVALUATION_REPORT_LANGUAGE_BULLET } from "@/lib/system-prompts-catalog";
 
@@ -8,7 +13,9 @@ export type ReportSectionKind =
   | "dimension_overview"
   | "subdimension_eval"
   | "variable_eval"
-  | "assigned_level";
+  | "assigned_level"
+  | "trl_eval"
+  | "trl_level";
 
 /** Sección expandida para runtime (prompt de formateo, límites de evaluación). */
 export type ReportSection = {
@@ -67,10 +74,13 @@ export function variableEvalId(variableId: string): string {
 }
 
 export const ASSIGNED_LEVEL_ID = "assigned_level";
+export const TRL_EVAL_ID = "trl_eval";
+export const TRL_LEVEL_ID = "trl_level";
 
 const DEFAULT_DIM_OVERVIEW = { minChars: 350, maxChars: 700 };
 const DEFAULT_SUB_EVAL = { minChars: 1200, maxChars: 1500 };
 const DEFAULT_ASSIGNED_LEVEL = { minChars: 1500, maxChars: 2000 };
+const DEFAULT_TRL_EVAL = { minChars: 1200, maxChars: 2500 };
 
 export const DEFAULT_SUBDIMENSION_EVAL_INSTRUCTIONS = `Incluye obligatoriamente en esta subdimensión:
 1. **Análisis** — evaluación según el proyecto y los criterios de la rúbrica.
@@ -89,6 +99,12 @@ export const DEFAULT_VARIABLE_EVAL_INSTRUCTIONS = `Incluye obligatoriamente en e
 2. **Nivel asignado** — línea exacta «Nivel: N» con el nivel de esta variable.
 3. **Justificación** — fundamentada en el Knowledge y la evidencia del proyecto.`;
 
+export const DEFAULT_TRL_EVAL_INSTRUCTIONS = `Incluye obligatoriamente:
+1. **Análisis** — evaluación según los criterios de los niveles TRL.
+2. **Nivel** — línea exacta «Nivel: N».
+3. **Justificación** — fundamentada en el Knowledge.
+4. **Sugerencias de mejora** — propuestas para avanzar de nivel.`;
+
 export function defaultInstructionForSectionKind(kind: ReportSectionKind): string {
   switch (kind) {
     case "dimension_overview":
@@ -99,6 +115,10 @@ export function defaultInstructionForSectionKind(kind: ReportSectionKind): strin
       return DEFAULT_VARIABLE_EVAL_INSTRUCTIONS;
     case "assigned_level":
       return DEFAULT_ASSIGNED_LEVEL_INSTRUCTIONS;
+    case "trl_eval":
+      return DEFAULT_TRL_EVAL_INSTRUCTIONS;
+    case "trl_level":
+      return "Bloque autoritativo con el Nivel TRL asignado (generado automáticamente).";
     default:
       return "";
   }
@@ -149,6 +169,31 @@ export function defaultReportFormatNiveles(): ReportFormatConfig {
     beforeScores: [],
     assignedLevelInstructions: DEFAULT_ASSIGNED_LEVEL_INSTRUCTIONS,
     assignedLevelLimits: { ...DEFAULT_ASSIGNED_LEVEL },
+  };
+}
+
+export function defaultReportFormatTrl(): ReportFormatConfig {
+  return {
+    preamble: [
+      customSection({
+        title: "Resumen del proyecto",
+        description: "Síntesis breve del proyecto evaluado.",
+        minChars: 900,
+        maxChars: 1000,
+      }),
+    ],
+    dimensionOverviewInstructions: "",
+    subdimensionEvalInstructions: DEFAULT_TRL_EVAL_INSTRUCTIONS,
+    dimensionOverviewLimits: { ...DEFAULT_DIM_OVERVIEW },
+    subdimensionEvalLimits: { ...DEFAULT_TRL_EVAL },
+    beforeScores: [
+      customSection({
+        title: "Síntesis final",
+        description: "Conclusión global de la evaluación TRL.",
+        minChars: 900,
+        maxChars: 1000,
+      }),
+    ],
   };
 }
 
@@ -233,6 +278,10 @@ export function resolveSectionInstruction(
       return config.subdimensionEvalInstructions?.trim() || DEFAULT_VARIABLE_EVAL_INSTRUCTIONS;
     case "assigned_level":
       return config.assignedLevelInstructions?.trim() || DEFAULT_ASSIGNED_LEVEL_INSTRUCTIONS;
+    case "trl_eval":
+      return config.subdimensionEvalInstructions?.trim() || DEFAULT_TRL_EVAL_INSTRUCTIONS;
+    case "trl_level":
+      return defaultInstructionForSectionKind("trl_level");
     default:
       return "";
   }
@@ -246,7 +295,9 @@ export function syncReportFormatWithRubric(
   const base =
     rubric.type === "ponderaciones"
       ? defaultReportFormatPonderaciones(rubric)
-      : defaultReportFormatNiveles();
+      : rubric.type === "trl"
+        ? defaultReportFormatTrl()
+        : defaultReportFormatNiveles();
 
   const normalized = normalizeReportFormatPartial(config);
 
@@ -403,6 +454,7 @@ export function mergeReportFormatConfig(
   }
 
   if (!raw || typeof raw !== "object") {
+    if (rubric?.type === "trl") return defaultReportFormatTrl();
     if (rubric?.type === "niveles") return defaultReportFormatNiveles();
     if (rubric?.type === "ponderaciones") return defaultReportFormatPonderaciones(rubric);
     return defaultReportFormatNiveles();
@@ -522,6 +574,24 @@ export function expandReportSections(
         });
       }
     }
+  } else if (rubric.type === "trl") {
+    out.push({
+      id: TRL_EVAL_ID,
+      title: "Evaluación TRL",
+      description: resolveSectionInstruction(synced, "trl_eval"),
+      ...synced.subdimensionEvalLimits,
+      kind: "trl_eval",
+      locked: true,
+    });
+    out.push({
+      id: TRL_LEVEL_ID,
+      title: "Nivel TRL",
+      description: resolveSectionInstruction(synced, "trl_level"),
+      minChars: 1,
+      maxChars: 200,
+      kind: "trl_level",
+      locked: true,
+    });
   } else {
     const niveles = rubric as RubricConfigNiveles;
     if (hasRubricVariables(niveles)) {
@@ -557,6 +627,9 @@ export function isReportFormatValid(config: ReportFormatConfig, rubric: RubricCo
   const expanded = expandReportSections(rubric, config);
   if (rubric.type === "ponderaciones") {
     return expanded.some((s) => s.kind === "subdimension_eval");
+  }
+  if (rubric.type === "trl") {
+    return expanded.some((s) => s.kind === "trl_eval");
   }
   if (rubric.type === "niveles" && hasRubricVariables(rubric)) {
     return (
@@ -903,6 +976,12 @@ export type RubricFormatRow =
   | { id: string; kind: "assigned_level"; label: string };
 
 export function listRubricFormatRows(rubric: RubricConfig): RubricFormatRow[] {
+  if (rubric.type === "trl") {
+    return [
+      { id: TRL_EVAL_ID, kind: "assigned_level", label: "Evaluación TRL" },
+      { id: TRL_LEVEL_ID, kind: "assigned_level", label: "Nivel TRL" },
+    ];
+  }
   if (rubric.type === "niveles") {
     const rows: RubricFormatRow[] = rubric.variables.map((v) => ({
       id: variableEvalId(v.id),

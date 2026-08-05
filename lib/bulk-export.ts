@@ -2,6 +2,7 @@ import type { BulkProjectRow } from "@/hooks/useBulkEvaluation";
 import { formatIndicatorScore, type RubricScoreSchemaEntry } from "@/lib/evaluation-scores";
 import { generateEvaluationPdfBlob, sanitizeFileName } from "@/lib/evaluation-pdf";
 import { looksLikeCompleteIgipReport } from "@/lib/report-completeness";
+import { isTrl } from "@/lib/eval-types/constants";
 
 function downloadBlob(blob: Blob, fileName: string): void {
   const url = URL.createObjectURL(blob);
@@ -24,13 +25,14 @@ export async function exportBulkResultsExcel(
   const workbook = new WorkbookCtor();
   const sheet = workbook.addWorksheet("Evaluación masiva");
 
+  const includeIndicator = !isTrl(evaluationTypeName);
   const headers = [
     "Nombre proyecto",
     "Archivo",
     "Estado extracción",
     "Estado evaluación",
-    ...schema.map((s) => `${s.dimension} / ${s.name}`),
-    "Nota indicador general",
+    ...schema.map((s) => (isTrl(evaluationTypeName) ? s.name : `${s.dimension} / ${s.name}`)),
+    ...(includeIndicator ? ["Nota indicador general"] : []),
   ];
   sheet.addRow(headers);
 
@@ -41,7 +43,9 @@ export async function exportBulkResultsExcel(
       row.extractionStatus,
       row.evaluationStatus,
       ...schema.map((s) => row.subdimensionScores[s.key] ?? ""),
-      row.overallScore != null ? formatIndicatorScore(row.overallScore) : "",
+      ...(includeIndicator
+        ? [row.overallScore != null ? formatIndicatorScore(row.overallScore) : ""]
+        : []),
     ]);
   }
 
@@ -71,7 +75,8 @@ export type HistoryExportRow = {
 export async function exportHistoryExcel(
   rows: HistoryExportRow[],
   schema: RubricScoreSchemaEntry[],
-  indicatorLabel: string
+  indicatorLabel: string,
+  options?: { includeIndicator?: boolean }
 ): Promise<void> {
   const ExcelJS = await import("exceljs");
   const mod =
@@ -79,6 +84,7 @@ export async function exportHistoryExcel(
   const WorkbookCtor = (mod as { Workbook: new () => import("exceljs").Workbook }).Workbook;
   const workbook = new WorkbookCtor();
   const sheet = workbook.addWorksheet("Historial");
+  const includeIndicator = options?.includeIndicator !== false;
 
   const headers = [
     "ID",
@@ -86,7 +92,7 @@ export async function exportHistoryExcel(
     "Tipo",
     "Fecha",
     ...schema.map((s) => s.name),
-    indicatorLabel,
+    ...(includeIndicator ? [indicatorLabel] : []),
   ];
   sheet.addRow(headers);
 
@@ -106,7 +112,9 @@ export async function exportHistoryExcel(
         const score = row.subdimension_scores[s.key];
         return score != null ? formatIndicatorScore(score) : "";
       }),
-      row.overall_score != null ? formatIndicatorScore(row.overall_score) : "",
+      ...(includeIndicator
+        ? [row.overall_score != null ? formatIndicatorScore(row.overall_score) : ""]
+        : []),
     ]);
   }
 

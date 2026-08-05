@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatIndicatorScore, type RubricScoreSchemaEntry } from "@/lib/evaluation-scores";
 import type { BulkProjectRow, BulkProjectStatus } from "@/hooks/useBulkEvaluation";
+import { isTrl } from "@/lib/eval-types/constants";
 
 const CELL_BORDER = "border border-border";
 
@@ -116,6 +117,7 @@ export default function BulkResultsTable({
 
   const hasCompletedEval = rows.some((r) => r.evaluationStatus === "done");
   const hasReports = rows.some((r) => r.reportContent.trim().length > 0);
+  const hideIndicator = isTrl(evaluationTypeName);
 
   const renderResizeHandle = (colKey: string) => (
     <div
@@ -196,13 +198,15 @@ export default function BulkResultsTable({
                     {renderResizeHandle(col.key)}
                   </th>
                 ))}
-                <th
-                  className={`relative ${CELL_BORDER} px-2 py-2 text-center align-bottom text-xs font-semibold text-foreground`}
-                  style={{ width: colWidths.indicator }}
-                >
-                  Indicador IGIP
-                  {renderResizeHandle("indicator")}
-                </th>
+                {!hideIndicator && (
+                  <th
+                    className={`relative ${CELL_BORDER} px-2 py-2 text-center align-bottom text-xs font-semibold text-foreground`}
+                    style={{ width: colWidths.indicator }}
+                  >
+                    Indicador {evaluationTypeName || "IGIP"}
+                    {renderResizeHandle("indicator")}
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -223,7 +227,9 @@ export default function BulkResultsTable({
                       <StatusBadge status={row.evaluationStatus} />
                     </td>
                     {schema.map((col) => {
-                      const score = row.subdimensionScores[col.key];
+                      const score =
+                        row.subdimensionScores[col.key] ??
+                        (hideIndicator ? row.overallScore : null);
                       return (
                         <td
                           key={col.key}
@@ -233,11 +239,13 @@ export default function BulkResultsTable({
                         </td>
                       );
                     })}
-                    <td
-                      className={`${CELL_BORDER} px-2 py-2 text-center align-top font-semibold text-foreground`}
-                    >
-                      {row.overallScore != null ? formatIndicatorScore(row.overallScore) : ""}
-                    </td>
+                    {!hideIndicator && (
+                      <td
+                        className={`${CELL_BORDER} px-2 py-2 text-center align-top font-semibold text-foreground`}
+                      >
+                        {row.overallScore != null ? formatIndicatorScore(row.overallScore) : ""}
+                      </td>
+                    )}
                   </tr>
               ))}
             </tbody>

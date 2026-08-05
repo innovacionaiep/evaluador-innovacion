@@ -18,7 +18,12 @@ export function evalTokenLabels(
 ): Partial<Record<keyof EvaluationConfig["maxTokens"], string>> {
   return {
     dimensionOverview: "Tokens nivel global",
-    subdimension: rubric.type === "ponderaciones" ? "Subdimensión" : "Variable",
+    subdimension:
+      rubric.type === "ponderaciones"
+        ? "Subdimensión"
+        : rubric.type === "trl"
+          ? "Evaluación TRL"
+          : "Variable",
     formatReport: "Formateo informe",
     summary: "Síntesis final",
   };

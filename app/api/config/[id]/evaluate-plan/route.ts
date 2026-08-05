@@ -9,7 +9,10 @@ import {
   mergeRubricConfig,
   subdimensionEvalContent,
   buildRubricScoreSchemaFromConfig,
+  TRL_LEVEL_SCORE_KEY,
+  TRL_LEVEL_SCORE_NAME,
   type RubricConfigNiveles,
+  type RubricConfigTrl,
 } from "@/lib/rubric-config";
 import {
   hasRubricVariables,
@@ -104,6 +107,26 @@ export async function GET(
       return NextResponse.json({
         rubricType: "niveles",
         subdimensions,
+        ragEvaluate,
+        knowledgeReferenceLabel: evaluation.knowledgeReferenceLabel,
+        projectElementsInRagQuery: evaluation.projectElementsInRagQuery,
+      });
+    }
+
+    if (rubric.type === "trl") {
+      const trl = rubric as RubricConfigTrl;
+      const rubricText = mainLevelsRubricText(trl.levels);
+      // Una sola clasificación TRL: el pipeline no usa precomputo por subdimensión.
+      return NextResponse.json({
+        rubricType: "trl",
+        subdimensions: [
+          {
+            key: TRL_LEVEL_SCORE_KEY,
+            dimension: "TRL",
+            name: TRL_LEVEL_SCORE_NAME,
+            rubricContent: rubricText,
+          },
+        ],
         ragEvaluate,
         knowledgeReferenceLabel: evaluation.knowledgeReferenceLabel,
         projectElementsInRagQuery: evaluation.projectElementsInRagQuery,

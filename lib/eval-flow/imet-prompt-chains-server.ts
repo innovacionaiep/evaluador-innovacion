@@ -9,7 +9,6 @@ import {
   DEFAULT_EXTRACT_SYSTEM_PROMPT_IMET,
   DEFAULT_EVAL_SYSTEM_FALLBACK,
   DEFAULT_ASSIGN_LEVEL_USER_PROMPT,
-  DEFAULT_GLOBAL_LEVEL_USER_PROMPT,
   DEFAULT_VARIABLE_EVAL_USER_PROMPT,
 } from "@/lib/eval-types/prompt-defaults";
 import {
@@ -248,7 +247,7 @@ Usa las herramientas para buscar en todo el proyecto. Cuando tengas suficiente i
           "output",
           "Destino en el pipeline",
           "Los fragmentos se insertan en buildSystemContext del paso 4.",
-          "No hay llamada LLM en este paso; el knowledge se consulta al evaluar cada variable o el nivel global.",
+          "No hay llamada LLM en este paso; el knowledge se consulta al evaluar cada variable.",
           "dinámico"
         ),
       ],
@@ -325,58 +324,25 @@ Usa las herramientas para buscar en todo el proyecto. Cuando tengas suficiente i
               3,
               "output",
               "Respuesta esperada",
-              "Análisis con nivel asignado parseado del texto.",
-              "El análisis y nivel de cada variable se acumulan en rawEvaluation antes del nivel global.",
+              "Análisis + JSON {\"nivel\": N} al final.",
+              "Se parsea el JSON (o fallback Nivel: N). Las notas alimentan tabla, historial e índice promedio.",
               "dinámico"
             ),
           ],
         },
         {
-          id: "eval-global-level",
-          title: "Nivel global desde variables",
+          id: "eval-average-index",
+          title: "Índice IMET (promedio)",
           repeatLabel: "Tras evaluar variables",
-          hint: EVALUATE_LLM_CHAIN_HINT,
           nodes: [
-            buildEvaluateSystemMessageNode({
-              order: 1,
-              systemPreview: buildVariableEvalSystemPreview(rubric, evaluation),
-              assemblyFlow: evaluateAssemblyFlow,
-              relatedConfigActionIds: EVALUATE_SYSTEM_RELATED_CONFIG_ACTIONS,
-            }),
-            buildLlmUserMessageNode({
-              order: 2,
-              description:
-                "Un solo mensaje user: plantilla de nivel global + orientación + borradores de variables evaluadas.",
-              content:
-                (evaluation.prompts.globalLevel?.trim() || DEFAULT_GLOBAL_LEVEL_USER_PROMPT) +
-                "\n\n[+ borradores de cada variable evaluada]",
-              source: evaluation.prompts.globalLevel?.trim() ? "configuración" : "código",
-              configActionId: "eval-prompts",
-              parts: [
-                {
-                  title: "Plantilla nivel global",
-                  description: "Resumen y asignación del nivel global",
-                  source: evaluation.prompts.globalLevel?.trim() ? "configuración" : "código",
-                  configActionId: "eval-prompts",
-                  content:
-                    evaluation.prompts.globalLevel?.trim() || DEFAULT_GLOBAL_LEVEL_USER_PROMPT,
-                },
-                {
-                  title: "Orientación nivel asignado",
-                  description: "Instrucciones para la asignación de nivel global",
-                  source: "configuración",
-                  configActionId: "eval-orientation",
-                  content:
-                    evaluation.phaseInstructions.assignedLevel?.trim() ||
-                    "[Orientación de nivel asignado]",
-                },
-                {
-                  title: "Borradores de variables",
-                  description: "Análisis de cada variable evaluada en el paso anterior",
-                  source: "dinámico",
-                },
-              ],
-            }),
+            chainNode(
+              1,
+              "output",
+              "Promedio simple",
+              "Sin LLM adicional.",
+              "Índice = promedio de los subniveles parseados, con 2 decimales. Se emite evaluation_scores + scores_summary.",
+              "dinámico"
+            ),
           ],
         },
       ]
@@ -524,14 +490,14 @@ Usa las herramientas para buscar en todo el proyecto. Cuando tengas suficiente i
   const levelChains: IgipPromptChain[] = [
     {
       id: "level-result",
-      title: "Nivel asignado IMET",
+      title: "Índice IMET",
       nodes: [
         chainNode(
           1,
           "output",
-          "Nivel global",
-          "Sin LLM adicional: parseo del análisis + mayoría de variables.",
-          `Se determina el nivel global del emprendimiento (${rubric.levels.map((l) => l.level).join(", ") || "1–N"}) y se integra en el informe final.`,
+          "Promedio de variables",
+          "Sin LLM adicional: promedio simple de subniveles parseados (2 decimales).",
+          "Las notas por variable y el índice alimentan el recuadro final del informe, la tabla del panel derecho y el historial.",
           "dinámico"
         ),
       ],

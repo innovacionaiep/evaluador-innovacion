@@ -35,7 +35,16 @@ function listSubRows(rubric: RubricConfig): SubRow[] {
     }
     return rows;
   }
-  if (hasRubricVariables(rubric)) {
+  if (rubric.type === "trl") {
+    return [
+      {
+        key: "trl:nivel",
+        dimension: "TRL",
+        name: "Nivel TRL",
+      },
+    ];
+  }
+  if (rubric.type === "niveles" && hasRubricVariables(rubric)) {
     return rubric.variables.map((v) => ({
       key: variableLevelKey(v.name),
       dimension: "Variables",

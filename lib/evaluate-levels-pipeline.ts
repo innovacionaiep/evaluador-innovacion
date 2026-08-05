@@ -15,36 +15,33 @@ import { stripCharacterLimitAnnotations } from "@/lib/report-format-limits";
 import { sanitizeLlmEvaluationText } from "@/lib/llm-output-sanitize";
 import { buildSubdimensionKnowledgeQuery } from "@/lib/evaluate-rag-query";
 import {
+  buildRubricScoreSchemaFromConfig,
   isRubricConfigValid,
   mergeRubricConfig,
   type RubricConfigNiveles,
   type RubricVariableConfig,
 } from "@/lib/rubric-config";
 import {
-  computeMajorityLevel,
-  extractGlobalLevelSection,
+  computeAverageLevel,
   hasRubricVariables,
   mainLevelsRubricText,
   parseAssignedLevel,
   validLevelNumbers,
+  validLevelNumbersForVariable,
   variableEvalContent,
   variableLevelKey,
 } from "@/lib/rubric-niveles";
+import { buildEvaluationScoresPayload } from "@/lib/evaluation-scores";
 import type { RetrievedChunk } from "@/lib/chunk-types";
 import type { EvaluateStreamEvent } from "@/lib/evaluate-pipeline";
 import {
   applyPromptTemplate,
   DEFAULT_ASSIGN_LEVEL_USER_PROMPT,
-  DEFAULT_GLOBAL_LEVEL_USER_PROMPT,
   DEFAULT_VARIABLE_EVAL_USER_PROMPT,
   formatOptionalPhaseInstructions,
 } from "@/lib/eval-types/prompt-defaults";
 import { resolveEvaluateSystemContextWithRetry } from "@/lib/resolve-evaluate-system-context";
-import {
-  EvaluateSystemContextError,
-  validateProjectElementsForEvaluation,
-} from "@/lib/evaluate-system-context-strict";
-
+import { validateProjectElementsForEvaluation } from "@/lib/evaluate-system-context-strict";
 async function collectStream(
   messages: { role: "system" | "user" | "assistant"; content: string }[],
   maxTokens: number,
@@ -114,10 +111,9 @@ function assignLevelPrompt(rubric: RubricConfigNiveles, evaluation: EvaluationCo
 
 function variableEvalPrompt(
   variable: RubricVariableConfig,
-  rubric: RubricConfigNiveles,
   evaluation: EvaluationConfig
 ): string {
-  const nums = validLevelNumbers(rubric).join(", ");
+  const nums = validLevelNumbersForVariable(variable).join(", ");
   const label = evaluation.knowledgeReferenceLabel;
   const phaseBlock = formatOptionalPhaseInstructions(evaluation.phaseInstructions.subdimensionEval);
   const template = evaluation.prompts.variableEval?.trim() || DEFAULT_VARIABLE_EVAL_USER_PROMPT;
@@ -127,37 +123,6 @@ function variableEvalPrompt(
     knowledgeLabel: label,
     phaseInstructions: phaseBlock,
   });
-}
-
-function globalLevelFromVariablesPrompt(
-  rubric: RubricConfigNiveles,
-  evaluation: EvaluationConfig,
-  variableAnalyses: { name: string; level: number | null; analysis: string }[],
-  majorityLevel: number | null
-): string {
-  const nums = validLevelNumbers(rubric).join(", ");
-  const label = evaluation.knowledgeReferenceLabel;
-  const phase = evaluation.phaseInstructions.assignedLevel.trim();
-  const summary = variableAnalyses
-    .map(
-      (v) =>
-        `- ${v.name}: ${v.level != null ? `Nivel ${v.level}` : "sin nivel parseado"}`
-    )
-    .join("\n");
-  const phaseBlock = phase ? `\n\nOrientación adicional:\n${phase}` : "";
-  const template = evaluation.prompts.globalLevel?.trim() || DEFAULT_GLOBAL_LEVEL_USER_PROMPT;
-  const base = applyPromptTemplate(template, {
-    variableSummary: summary,
-    majorityLevel: majorityLevel != null ? String(majorityLevel) : "n/d",
-    levelNumbers: nums,
-    knowledgeLabel: label,
-    phaseInstructions: phaseBlock,
-  });
-  // Adjuntar borradores de variables (siempre necesarios para el LLM).
-  return `${base}
-
-Evaluaciones por variable (borrador):
-${variableAnalyses.map((v) => `### Variable: ${v.name}\n\n${v.analysis.trim()}`).join("\n\n")}`.trim();
 }
 
 type VariableEvalResult = {
@@ -185,6 +150,7 @@ async function evaluateVariables(
     const sub = { name: variable.name, content };
     const ragQuery = buildSubdimensionKnowledgeQuery(dim, sub, projectElementsTable, topN);
     const key = variableLevelKey(variable.name);
+    const validLevels = validLevelNumbersForVariable(variable);
 
     const analysis = await runRagLlmPass({
       evaluationTypeId,
@@ -195,7 +161,7 @@ async function evaluateVariables(
         name: variable.name,
         content,
       },
-      userPrompt: variableEvalPrompt(variable, rubric, evaluation),
+      userPrompt: variableEvalPrompt(variable, evaluation),
       maxTokens: evaluation.maxTokens.subdimension,
       knowledgeLabel: evaluation.knowledgeReferenceLabel,
       semaphore,
@@ -204,7 +170,7 @@ async function evaluateVariables(
       includeDocNames: resolveRagIncludeDocNames(evaluation.ragEvaluate, key) ?? null,
     });
 
-    const level = parseAssignedLevel(analysis, validLevelNumbers(rubric));
+    const level = parseAssignedLevel(analysis, validLevels);
     onEvent?.({
       type: "subdimension",
       dimension: "Variables",
@@ -237,18 +203,14 @@ async function evaluateVariables(
   return results;
 }
 
-function buildRawEvaluationFromVariables(
-  variableResults: VariableEvalResult[],
-  globalAnalysis: string
-): string {
-  const variableBlocks = variableResults.map(
-    (r) => `### Variable: ${r.variable.name}\n\n${r.analysis.trim()}`
-  );
-  return `${variableBlocks.join("\n\n")}\n\n---\n\n## Nivel asignado global\n\n${globalAnalysis.trim()}`;
+function buildRawEvaluationFromVariables(variableResults: VariableEvalResult[]): string {
+  return variableResults
+    .map((r) => `### Variable: ${r.variable.name}\n\n${r.analysis.trim()}`)
+    .join("\n\n");
 }
 
 /**
- * Evaluación por niveles (IMET): por variables + nivel global, informe desde §6.
+ * Evaluación por niveles (IMET): por variables (JSON de subnivel) + promedio; informe desde §6.
  */
 export async function* runEvaluateLevelsPipeline(
   evaluationTypeId: number,
@@ -291,15 +253,18 @@ export async function* runEvaluateLevelsPipeline(
 
   const semaphore = getGlobalLlmSemaphore();
   const levelNums = validLevelNumbers(rubric);
+  const indicatorLabel = evaluation.indicatorLabel || "IMET";
 
   let rawEvaluation: string;
-  let assignedLevel: number | null;
+  let assignedLevel: number | null = null;
   let levelTitle = "";
+  let variableScores: Record<string, number | null> = {};
+  let overallScore: number | null = null;
 
   if (hasRubricVariables(rubric)) {
     yield {
       type: "step",
-      message: `Evaluando ${rubric.variables.length} variable(s) de nivel…`,
+      message: `Evaluando ${rubric.variables.length} variable(s)…`,
     };
 
     const eventQueue: EvaluateStreamEvent[] = [];
@@ -314,48 +279,25 @@ export async function* runEvaluateLevelsPipeline(
     );
     for (const e of eventQueue) yield e;
 
-    const majorityLevel = computeMajorityLevel(variableResults.map((r) => r.level));
+    rawEvaluation = buildRawEvaluationFromVariables(variableResults);
+
+    for (const r of variableResults) {
+      variableScores[variableLevelKey(r.variable.name)] = r.level;
+    }
+    overallScore = computeAverageLevel(variableResults.map((r) => r.level));
+
+    const scoreSchema = buildRubricScoreSchemaFromConfig(rubric);
+    const evaluationScoresPayload = buildEvaluationScoresPayload(
+      scoreSchema,
+      variableScores,
+      indicatorLabel
+    );
+    evaluationScoresPayload.overallScore = overallScore;
 
     yield {
-      type: "step",
-      message: "Determinando nivel global del proyecto…",
+      type: "evaluation_scores",
+      payload: evaluationScoresPayload,
     };
-
-    const rubricText = mainLevelsRubricText(rubric.levels);
-    const globalAnalysis = await runRagLlmPass({
-      evaluationTypeId,
-      projectElementsTable,
-      ragQuery: [
-        rubricText.slice(0, 600),
-        variableResults.map((r) => `${r.variable.name} ${r.level ?? ""}`).join(" "),
-      ].join(" "),
-      evaluateSubdimension: {
-        dimensionName: "Nivel global",
-        name: "Asignación de nivel",
-        content: rubricText,
-      },
-      userPrompt: globalLevelFromVariablesPrompt(
-        rubric,
-        evaluation,
-        variableResults.map((r) => ({
-          name: r.variable.name,
-          level: r.level,
-          analysis: r.analysis,
-        })),
-        majorityLevel
-      ),
-      maxTokens: evaluation.maxTokens.dimensionOverview,
-      knowledgeLabel: evaluation.knowledgeReferenceLabel,
-      semaphore,
-      subdimensionLabel: "nivel global (desde variables)",
-      includeDocNames: resolveRagIncludeDocNames(evaluation.ragEvaluate, "nivel-global") ?? null,
-    });
-
-    rawEvaluation = buildRawEvaluationFromVariables(variableResults, globalAnalysis);
-    assignedLevel =
-      parseAssignedLevel(extractGlobalLevelSection(rawEvaluation) ?? globalAnalysis, levelNums) ??
-      parseAssignedLevel(globalAnalysis, levelNums) ??
-      majorityLevel;
   } else {
     yield { type: "step", message: "Evaluando nivel global del proyecto…" };
 
@@ -379,16 +321,15 @@ export async function* runEvaluateLevelsPipeline(
     });
 
     assignedLevel = parseAssignedLevel(rawEvaluation, levelNums);
+    const levelMeta = rubric.levels.find((l) => l.level === assignedLevel);
+    levelTitle = levelMeta?.title ?? "";
+
+    yield {
+      type: "assigned_level" as const,
+      level: assignedLevel,
+      title: levelTitle,
+    };
   }
-
-  const levelMeta = rubric.levels.find((l) => l.level === assignedLevel);
-  levelTitle = levelMeta?.title ?? "";
-
-  yield {
-    type: "assigned_level" as const,
-    level: assignedLevel,
-    title: levelTitle,
-  };
 
   yield { type: "formatting", message: "Informe final: integrando evaluación y redactando secciones con IA…" };
 
@@ -407,6 +348,8 @@ export async function* runEvaluateLevelsPipeline(
     evaluation,
     assignedLevel,
     levelTitle,
+    subdimensionScores: variableScores,
+    overallScore,
   })) {
     if (event.type === "step") {
       yield { type: "step", message: event.message };
@@ -427,5 +370,14 @@ export async function* runEvaluateLevelsPipeline(
   }
 
   yield { type: "report_content", content: assembled.finalReport };
+
+  if (hasRubricVariables(rubric)) {
+    yield {
+      type: "scores_summary",
+      subdimensionScores: { ...variableScores },
+      overallScore,
+    };
+  }
+
   yield { type: "done" };
 }

@@ -307,7 +307,7 @@ function mergeRagConfig(raw: Partial<RagConfig> | null | undefined): RagConfig {
     }
   }
   delete modes.evaluate;
-  const chunkSizeChars = clamp(Number(raw.chunkSizeChars ?? base.chunkSizeChars), 200, 8000);
+  const chunkSizeChars = clamp(Number(raw.chunkSizeChars ?? base.chunkSizeChars), 200, 3500);
   const overlapChars = clamp(
     Number(raw.overlapChars ?? base.overlapChars),
     0,

@@ -31,9 +31,14 @@ export function EvaluationLimitsFields({
   }> = [
     {
       key: "subdimensionEval",
-      label: rubric.type === "ponderaciones" ? "Límites subdimensión" : "Límites variable",
+      label:
+        rubric.type === "ponderaciones"
+          ? "Límites subdimensión"
+          : rubric.type === "trl"
+            ? "Límites evaluación TRL"
+            : "Límites variable",
     },
-    ...(rubric.type !== "ponderaciones"
+    ...(rubric.type === "niveles"
       ? [{ key: "assignedLevel" as const, label: "Límites nivel asignado" }]
       : []),
   ];

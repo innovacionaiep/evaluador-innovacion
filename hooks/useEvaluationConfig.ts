@@ -46,7 +46,13 @@ export function useEvaluationConfig(activeTypeId: number | null, configOpen: boo
         setElementsWithSection(mapped);
         const paths = Array.isArray(data.knowledge_paths) ? data.knowledge_paths : [];
         setKnowledgeDocNames(knowledgePathsToLabels(paths));
-        const rubric = mergeRubricConfig(data.rubric_config);
+        const typeName =
+          typeof data.evaluation_type_name === "string"
+            ? data.evaluation_type_name
+            : typeof data.name === "string"
+              ? data.name
+              : undefined;
+        const rubric = mergeRubricConfig(data.rubric_config, typeName);
         const schema = buildRubricScoreSchemaFromConfig(rubric);
         setRubricPrompt(
           schema.length > 0

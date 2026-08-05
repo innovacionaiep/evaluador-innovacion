@@ -22,6 +22,7 @@ import { extractGanttActivitiesFromExcel, getGanttSheetContext } from "@/lib/gan
 import { isGanttActivitiesElement, sheetsForElement, isGanttSheetName } from "@/lib/sheet-element-routing";
 import { mergeEvaluationTypeSettings } from "@/lib/evaluation-type-settings";
 import { conenergiaTrlFixture } from "@/lib/extract-fixtures/conenergia-trl.fixture";
+import { agrotechEscalabilidadFixture } from "@/lib/extract-fixtures/agrotech-escalabilidad.fixture";
 import { IGIP_ELEMENT_DEFS } from "@/lib/extract-fixtures/igip-elements";
 import {
   IGIP_VERIFICATION_MATRIX,
@@ -50,9 +51,10 @@ describe("extract-source-policy", () => {
 });
 
 describe("verification matrix IGIP", () => {
-  it("cubre los 13 elementos de config", () => {
+  it("cubre los 21 elementos de config", () => {
     assert.equal(matrixCoversAllConfigElements(IGIP_ELEMENT_DEFS), true);
-    assert.equal(IGIP_VERIFICATION_MATRIX.length, 13);
+    assert.equal(IGIP_VERIFICATION_MATRIX.length, 21);
+    assert.equal(IGIP_ELEMENT_DEFS.length, 21);
   });
 
   it("documenta elementos sin test unitario", () => {
@@ -351,6 +353,25 @@ describe("CONenergía TRL — campos ampliados", () => {
     };
     const h = extractElementHeuristic(fixture, element);
     assert.doesNotMatch(h.content, /^social,\s*medioambiental/i);
+  });
+
+  it("Escalabilidad: etiqueta larga A–B + respuesta C–E (layout AgroTech)", () => {
+    const fixture = [agrotechEscalabilidadFixture()];
+    const element = {
+      title: "Escalabilidad",
+      description:
+        "Escalabilidad: ¿Existen planes para expandir el proyecto?. ¿Existe alguna estrategia para adopción?",
+      section: "Desarrollo Técnico",
+    };
+    const form = extractFormRowFromExcel(fixture, element);
+    assert.ok(form?.content, "form_row debe hallar Escalabilidad");
+    assert.match(form!.content, /Novedad|living lab|jóvenes/i);
+    assert.doesNotMatch(form!.content, /^Escalabilidad:/i);
+    assert.doesNotMatch(form!.content, /¿Existen planes/i);
+
+    const det = tryDeterministicExtract(fixture, element);
+    assert.ok(det?.content, "determinista no debe quedar vacío");
+    assert.match(det!.content, /Novedad|living lab|jóvenes/i);
   });
 
   it("Indicadores: no devuelve tabla cruda de forma determinista", () => {

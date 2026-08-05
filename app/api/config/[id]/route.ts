@@ -145,29 +145,18 @@ export async function GET(
     );
 
     return NextResponse.json({
-
       evaluation_type_id: config.evaluation_type_id,
-
+      name: type.name,
       knowledge_paths,
-
       elements,
-
       report_format: config.report_format ?? "",
-
       rubric_prompt: config.rubric_prompt ?? "",
-
       rubric_config,
-
       report_format_config,
-
       evaluation_config,
-
       pipeline_config: settings.pipeline,
-
       rag_config: settings.rag,
-
       extract_config: settings.extract,
-
     });
 
   } catch (e) {

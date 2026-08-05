@@ -62,6 +62,14 @@ export function isFactorInnovadorElement(element: ElementLike): boolean {
   return /factor\s+innovador|innovador\s+del\s+proyecto/.test(t);
 }
 
+export function isEscalabilidadElement(element: ElementLike): boolean {
+  const t = normalizeForMatch(element.title);
+  return /\bescalabilidad\b/.test(t);
+}
+
+const ESCALABILIDAD_LABEL_RE =
+  /\bescalabilidad\b|existen\s+planes\s+para\s+expandir|estrategia\s+para\s+adopci|adopci[oó]n\s+de\s+la\s+soluci/i;
+
 export function isPertinenciaLocalElement(element: ElementLike): boolean {
   const t = normalizeForMatch(element.title);
   return t.includes("pertinencia") && t.includes("local") && !t.includes("disciplinar");
@@ -214,8 +222,9 @@ function scoreLabelMatch(label: string, element: ElementLike): number {
     return 0.1;
   }
 
-  if (/escalabilidad/i.test(titleNorm) && /expandir|adopci|replicar|escalar|estrategia/i.test(labelNorm)) {
-    return 0.88;
+  if (/escalabilidad/i.test(titleNorm)) {
+    if (/^escalabilidad\b/.test(labelNorm)) return 0.96;
+    if (/expandir|adopci|replicar|escalar|estrategia/i.test(labelNorm)) return 0.9;
   }
 
   if (/sostenibilidad/i.test(titleNorm) && /sostenibilidad/i.test(labelNorm)) {
@@ -261,7 +270,9 @@ function extractGenericFormRow(
     const score = scoreLabelMatch(labelCell.value, element);
     if (score < 0.52) continue;
 
-    const rowValue = collectFormAnswer(map, merges, labelCell, labelCells);
+    const rowValue = isEscalabilidadElement(element)
+      ? collectEscalabilidadAnswer(map, merges, labelCell, labelCells)
+      : collectFormAnswer(map, merges, labelCell, labelCells);
     if (rowValue.length < 25) continue;
 
     const answer = toAnswerOnly(rowValue, labelCell.value);
@@ -397,6 +408,31 @@ function splitPertinenciaDisciplinar(text: string): string {
   return "";
 }
 
+function collectEscalabilidadAnswer(
+  map: Map<string, string>,
+  merges: ExcelMerge[],
+  labelCell: { row: number; col: number; value: string },
+  labelCells: ExcelSheet["cells"]
+): string {
+  const primary = collectFormAnswer(map, merges, labelCell, labelCells);
+  let answer = toAnswerOnly(primary, labelCell.value);
+
+  // En bitácoras A–B son etiqueta fusionada y C–E la respuesta: si la respuesta
+  // quedó siendo la pregunta, forzar lectura desde la columna de valor (C).
+  if (
+    !answer ||
+    answer.length < 25 ||
+    looksLikeFormQuestionContent(answer) ||
+    normalizeForMatch(answer) === normalizeForMatch(labelCell.value)
+  ) {
+    const fromValueCol = collectRowValueWithMerges(map, merges, labelCell.row, 3);
+    const stripped = toAnswerOnly(fromValueCol, labelCell.value);
+    if (stripped.length > answer.length) answer = stripped;
+  }
+
+  return answer.trim();
+}
+
 function rowValueHasCombinedPertinencia(value: string): boolean {
   return findDisciplinarBoundary(value) > 0;
 }
@@ -410,6 +446,17 @@ function extractFromSheet(sheet: ExcelSheet, element: ElementLike): string {
 
   for (const labelCell of labelCells) {
     const labelNorm = normalizeForMatch(labelCell.value);
+
+    // Escalabilidad: evaluar antes del filtro de "parece pregunta", porque la etiqueta
+    // larga incluye ¿? y a veces se fusiona A–B con el texto de la pregunta.
+    if (isEscalabilidadElement(element) && ESCALABILIDAD_LABEL_RE.test(labelNorm)) {
+      const answer = collectEscalabilidadAnswer(map, merges, labelCell, labelCells);
+      if (answer.length > 20 && isAcceptableExtractedContent(element as ElementDef, answer)) {
+        return answer;
+      }
+      continue;
+    }
+
     const rowValue = collectFormAnswer(map, merges, labelCell, labelCells);
     if (!rowValue || rowValue.length < 15) continue;
     if (looksLikeFormQuestionContent(rowValue)) continue;

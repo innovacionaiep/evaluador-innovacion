@@ -155,7 +155,17 @@ export default function Home() {
         }
         if (Array.isArray(data)) {
           setEvaluationTypes(data);
-          setActiveTypeId((prev) => prev ?? (data.length > 0 ? data[0].id : null));
+          setActiveTypeId((prev) => {
+            if (prev != null && data.some((t) => t.id === prev)) return prev;
+            // Id obsoleto tras recrear un tipo fijo: rematch por nombre.
+            const prevName = evaluationTypes.find((t) => t.id === prev)?.name;
+            if (prevName) {
+              const rematch = data.find((t) => t.name === prevName);
+              if (rematch) return rematch.id;
+            }
+            if (prev == null && data.length > 0) return data[0].id;
+            return data.length > 0 ? data[0].id : null;
+          });
         } else if (data && typeof data === "object" && "error" in data && data.error) {
           setTypesLoadError(String(data.error));
         }
@@ -360,7 +370,11 @@ export default function Home() {
         onTypesChange={() => fetch("/api/evaluation-types").then((r) => r.json()).then(setEvaluationTypes)}
         onSelectType={setActiveTypeId}
       />
-      <HistoryPanel isOpen={historyOpen} onClose={() => setHistoryOpen(false)} />
+      <HistoryPanel
+        isOpen={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        initialTypeName={activeTypeName}
+      />
       {fullscreenSection === "project" && evaluationMode === "individual" && (
         <FullscreenOverlay title="Proyecto extraído" onClose={() => setFullscreenSection(null)}>
           <div className="text-sm text-foreground">

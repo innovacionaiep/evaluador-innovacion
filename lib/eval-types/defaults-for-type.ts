@@ -1,4 +1,4 @@
-import { isImet } from "./constants";
+import { isImet, isTrl } from "./constants";
 import {
   igipExtractDefault,
   igipEvaluationDefaults,
@@ -13,6 +13,13 @@ import {
   imetRubricDefault,
   imetTypeSettings,
 } from "./imet";
+import {
+  trlExtractDefault,
+  trlEvaluationDefaults,
+  trlReportFormatDefault,
+  trlRubricDefault,
+  trlTypeSettings,
+} from "./trl";
 import type { EvaluationConfig } from "@/lib/evaluation-config";
 import type { ExtractConfig, EvaluationTypeSettings } from "@/lib/evaluation-type-settings";
 import type { ReportFormatConfig } from "@/lib/report-format-config";
@@ -25,6 +32,15 @@ export function defaultsForType(name?: string | null): {
   reportFormat: ReportFormatConfig;
   typeSettings: EvaluationTypeSettings;
 } {
+  if (isTrl(name)) {
+    return {
+      rubric: trlRubricDefault(),
+      extract: trlExtractDefault(),
+      evaluation: trlEvaluationDefaults(),
+      reportFormat: trlReportFormatDefault(),
+      typeSettings: trlTypeSettings(),
+    };
+  }
   if (isImet(name)) {
     return {
       rubric: imetRubricDefault(),

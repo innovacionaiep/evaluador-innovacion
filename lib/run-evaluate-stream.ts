@@ -15,6 +15,8 @@ import {
 import type { RetrievedChunk } from "@/lib/chunk-types";
 import { sanitizeLlmEvaluationText } from "@/lib/llm-output-sanitize";
 import { looksLikeCompleteIgipReport } from "@/lib/report-completeness";
+import { ensureTrlScoresFromText } from "@/lib/trl-score-recover";
+import { TRL_LEVEL_SCORE_KEY } from "@/lib/rubric-config";
 
 export type EvaluateStreamResult = {
   reportContent: string;
@@ -327,6 +329,19 @@ export async function runEvaluateStream(params: {
     throw new Error(
       "La evaluación no generó un informe completo (faltan resumen, síntesis o notas). Reintente la evaluación."
     );
+  }
+
+  const looksTrl =
+    TRL_LEVEL_SCORE_KEY in subdimensionScores ||
+    /Evaluaci[oó]n\s+TRL|Nivel\s+TRL|Sin evaluaci[oó]n TRL/i.test(reportContent);
+  if (looksTrl) {
+    const recovered = ensureTrlScoresFromText({
+      reportOrDraft: `${reportContent}\n${reportDraft}`,
+      subdimensionScores,
+      overallScore,
+    });
+    subdimensionScores = recovered.subdimensionScores;
+    overallScore = recovered.overallScore;
   }
 
   return {

@@ -49,14 +49,76 @@ export function variableLevelKey(variableName: string): string {
   return `variable:${variableName.trim().toLowerCase()}`;
 }
 
+/**
+ * Extrae el primer «Nivel: N» tolerando markdown (**Nivel:** 2, Nivel: **2**, etc.).
+ * Si `validLevels` está vacío, acepta cualquier entero no negativo.
+ */
 export function parseAssignedLevel(
   text: string,
   validLevels: number[]
 ): number | null {
-  const m = /Nivel\s*:\s*(\d+)/i.exec(text);
-  if (!m) return null;
-  const n = Number(m[1]);
-  return validLevels.includes(n) ? n : null;
+  const fromJson = parseVariableLevelJson(text, validLevels);
+  if (fromJson != null) return fromJson;
+
+  const patterns = [
+    // Nivel TRL autoritativo (informe final)
+    /Nivel\s+TRL\s*:\s*(\d+)\b/i,
+    // **Nivel:** 2  |  Nivel: **2**  |  Nivel asignado: 2
+    /(?:\*{0,2}\s*)?Nivel(?:\s+asignado)?(?:\s+TRL)?\s*\*{0,2}\s*:\s*\*{0,2}\s*(\d+)\b/i,
+    // Línea suelta "Nivel 3" cerca de justificación
+    /(?:^|\n)\s*(?:\*{0,2}\s*)?Nivel\s+(\d+)\s*(?:\*{0,2}\s*)?(?:\n|$)/i,
+  ];
+
+  for (const re of patterns) {
+    const m = re.exec(text);
+    if (!m) continue;
+    const n = Number(m[1]);
+    if (!Number.isFinite(n)) continue;
+    if (validLevels.length === 0 || validLevels.includes(n)) return n;
+  }
+  return null;
+}
+
+/** Extrae `{"nivel": N}` (o fence markdown) del final de la evaluación de variable. */
+export function parseVariableLevelJson(
+  text: string,
+  validLevels: number[]
+): number | null {
+  const candidates: string[] = [];
+  const fenced = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
+  for (const m of fenced) {
+    if (m[1]?.trim()) candidates.push(m[1].trim());
+  }
+  const start = text.lastIndexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    candidates.push(text.slice(start, end + 1));
+  }
+
+  for (const raw of candidates) {
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const value = parsed.nivel ?? parsed.level ?? parsed.nota ?? parsed.score;
+      const n =
+        typeof value === "number"
+          ? value
+          : typeof value === "string"
+            ? parseInt(value.trim(), 10)
+            : NaN;
+      if (Number.isInteger(n) && validLevels.includes(n)) return n;
+    } catch {
+      /* try next */
+    }
+  }
+  return null;
+}
+
+/** Promedio simple de niveles (ignora null); 2 decimales. */
+export function computeAverageLevel(levels: (number | null)[]): number | null {
+  const valid = levels.filter((l): l is number => l != null);
+  if (valid.length === 0) return null;
+  const sum = valid.reduce((a, b) => a + b, 0);
+  return Math.round((sum / valid.length) * 100) / 100;
 }
 
 /** Nivel global por mayoría; en empate gana el nivel más alto. */
@@ -123,6 +185,19 @@ export function hasRubricVariables(
   return (rubric.variables?.length ?? 0) > 0;
 }
 
+/** Números de nivel de la escala principal (referencia visual). */
 export function validLevelNumbers(rubric: RubricConfigNiveles): number[] {
   return rubric.levels.map((l) => l.level);
+}
+
+/** Números de subnivel propios de una variable. */
+export function validLevelNumbersForVariable(
+  variable: RubricVariableConfig
+): number[] {
+  return variable.levels.map((l) => l.level);
+}
+
+/** Escala 1–5 por defecto si la variable no tiene subniveles. */
+export function defaultVariableLevelNumbers(): number[] {
+  return [1, 2, 3, 4, 5];
 }

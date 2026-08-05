@@ -9,7 +9,7 @@ import {
   type RubricScoreSchemaEntry,
 } from "@/lib/evaluation-scores";
 
-export type RubricType = "ponderaciones" | "niveles";
+export type RubricType = "ponderaciones" | "niveles" | "trl";
 
 export type RubricScoreDescription = {
   value: number;
@@ -60,7 +60,17 @@ export type RubricConfigNiveles = {
   variables: RubricVariableConfig[];
 };
 
-export type RubricConfig = RubricConfigPonderaciones | RubricConfigNiveles;
+/** Rúbrica TRL: solo niveles principales; una clasificación por proyecto. */
+export type RubricConfigTrl = {
+  type: "trl";
+  levels: RubricLevelConfig[];
+};
+
+export type RubricConfig = RubricConfigPonderaciones | RubricConfigNiveles | RubricConfigTrl;
+
+/** Clave canónica del score TRL en tablas masivas / historial. */
+export const TRL_LEVEL_SCORE_KEY = "trl:nivel";
+export const TRL_LEVEL_SCORE_NAME = "Nivel TRL";
 
 export function newRubricId(): string {
   return `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -152,7 +162,13 @@ export function defaultRubricConfigNiveles(): RubricConfigNiveles {
   return { type: "niveles", levels, variables: [] };
 }
 
-import { rubricTypeFor } from "@/lib/eval-types/constants";
+/** Lista vacía: el usuario carga los niveles TRL en Config. */
+export function defaultRubricConfigTrl(): RubricConfigTrl {
+  return { type: "trl", levels: [] };
+}
+
+import { rubricTypeFor, isImet } from "@/lib/eval-types/constants";
+import { seedImetRubricIfEmpty } from "@/lib/eval-types/imet-rubric-official";
 
 function inferRubricTypeFromName(typeName?: string): RubricType {
   return rubricTypeFor(typeName);
@@ -193,30 +209,19 @@ function mergePonderaciones(
   };
 }
 
-function mergeVariableLevels(
-  mainLevels: RubricLevelConfig[],
+/** Subniveles propios de una variable (independientes de la escala principal). */
+function mergeVariableOwnLevels(
   rawLevels: RubricVariableLevelConfig[] | undefined
 ): RubricVariableLevelConfig[] {
-  const byLevel = new Map(
-    (rawLevels ?? [])
-      .filter((l) => l && Number.isFinite(Number(l.level)))
-      .map((l) => [
-        Number(l.level),
-        {
-          level: Number(l.level),
-          title: typeof l.title === "string" ? l.title.trim() : "",
-          description: typeof l.description === "string" ? l.description : "",
-        },
-      ])
-  );
-  return mainLevels.map((main) => {
-    const prev = byLevel.get(main.level);
-    return {
-      level: main.level,
-      title: prev?.title || main.title,
-      description: prev?.description ?? "",
-    };
-  });
+  if (!Array.isArray(rawLevels)) return [];
+  return rawLevels
+    .filter((l) => l && Number.isFinite(Number(l.level)))
+    .map((l) => ({
+      level: Number(l.level),
+      title: typeof l.title === "string" ? l.title.trim() : "",
+      description: typeof l.description === "string" ? l.description : "",
+    }))
+    .sort((a, b) => a.level - b.level);
 }
 
 function mergeNiveles(raw: Partial<RubricConfigNiveles> | null | undefined): RubricConfigNiveles {
@@ -243,11 +248,30 @@ function mergeNiveles(raw: Partial<RubricConfigNiveles> | null | undefined): Rub
         .map((v) => ({
           id: typeof v.id === "string" && v.id ? v.id : newRubricId(),
           name: v.name.trim(),
-          levels: mergeVariableLevels(mergedLevels, v.levels),
+          levels: mergeVariableOwnLevels(v.levels),
         }))
     : [];
 
   return { type: "niveles", levels: mergedLevels, variables };
+}
+
+function mergeTrl(raw: Partial<RubricConfigTrl> | null | undefined): RubricConfigTrl {
+  const base = defaultRubricConfigTrl();
+  if (!raw || raw.type !== "trl") return base;
+
+  const levels = Array.isArray(raw.levels)
+    ? raw.levels
+        .filter((l) => l && Number.isFinite(Number(l.level)))
+        .map((l) => ({
+          id: typeof l.id === "string" && l.id ? l.id : newRubricId(),
+          level: Number(l.level),
+          title: typeof l.title === "string" ? l.title.trim() : `Nivel ${l.level}`,
+          description: typeof l.description === "string" ? l.description : "",
+        }))
+        .sort((a, b) => a.level - b.level)
+    : [];
+
+  return { type: "trl", levels };
 }
 
 export function mergeRubricConfig(
@@ -256,16 +280,27 @@ export function mergeRubricConfig(
 ): RubricConfig {
   const hasTypeName = typeof typeName === "string" && typeName.trim().length > 0;
   const forced = hasTypeName ? inferRubricTypeFromName(typeName) : null;
+  const seedImet = hasTypeName && isImet(typeName);
+
+  const maybeSeed = (cfg: RubricConfig): RubricConfig => {
+    if (!seedImet || cfg.type !== "niveles") return cfg;
+    return seedImetRubricIfEmpty(cfg);
+  };
 
   if (!raw || typeof raw !== "object") {
-    if (forced === "niveles") return defaultRubricConfigNiveles();
+    if (forced === "trl") return defaultRubricConfigTrl();
+    if (forced === "niveles") return maybeSeed(defaultRubricConfigNiveles());
     return defaultRubricConfigPonderaciones();
   }
   const o = raw as { type?: string };
 
+  if (forced === "trl") {
+    if (o.type === "trl") return mergeTrl(raw as RubricConfigTrl);
+    return defaultRubricConfigTrl();
+  }
   if (forced === "niveles") {
-    if (o.type === "niveles") return mergeNiveles(raw as RubricConfigNiveles);
-    return defaultRubricConfigNiveles();
+    if (o.type === "niveles") return maybeSeed(mergeNiveles(raw as RubricConfigNiveles));
+    return maybeSeed(defaultRubricConfigNiveles());
   }
   if (forced === "ponderaciones") {
     if (o.type === "ponderaciones") return mergePonderaciones(raw as RubricConfigPonderaciones);
@@ -273,6 +308,7 @@ export function mergeRubricConfig(
   }
 
   // Sin nombre de tipo: respetar el type del JSON (tests / legacy).
+  if (o.type === "trl") return mergeTrl(raw as RubricConfigTrl);
   if (o.type === "niveles") return mergeNiveles(raw as RubricConfigNiveles);
   if (o.type === "ponderaciones") return mergePonderaciones(raw as RubricConfigPonderaciones);
   return defaultRubricConfigPonderaciones();
@@ -287,11 +323,22 @@ export function totalWeightPercent(config: RubricConfigPonderaciones): number {
 }
 
 export function isRubricConfigValid(config: RubricConfig): boolean {
+  if (config.type === "trl") {
+    return (
+      config.levels.length > 0 &&
+      config.levels.every(
+        (l) => Number.isFinite(l.level) && (l.title?.trim().length ?? 0) > 0
+      )
+    );
+  }
   if (config.type === "niveles") {
     if (config.levels.length === 0) return false;
     if (config.variables.length === 0) return true;
     return config.variables.every(
-      (v) => v.name.trim().length > 0 && v.levels.length === config.levels.length
+      (v) =>
+        v.name.trim().length > 0 &&
+        v.levels.length > 0 &&
+        v.levels.every((l) => Number.isFinite(l.level) && l.title.trim().length > 0)
     );
   }
   return config.dimensions.length > 0 && totalWeightPercent(config) === 100;
@@ -342,6 +389,11 @@ export function parseRubricFromLegacyText(text: string): RubricConfigPonderacion
 }
 
 export function compileRubricToLegacyText(config: RubricConfig): string {
+  if (config.type === "trl") {
+    return config.levels
+      .map((l) => `Nivel ${l.level}: ${l.title}\n${l.description}`)
+      .join("\n\n");
+  }
   if (config.type === "niveles") {
     const main = config.levels
       .map((l) => `Nivel ${l.level}: ${l.title}\n${l.description}`)
@@ -377,7 +429,24 @@ export function compileRubricToLegacyText(config: RubricConfig): string {
 export function buildRubricScoreSchemaFromConfig(
   config: RubricConfig
 ): RubricScoreSchemaEntry[] {
-  if (config.type !== "ponderaciones") return [];
+  if (config.type === "trl") {
+    return [
+      {
+        dimension: "TRL",
+        name: TRL_LEVEL_SCORE_NAME,
+        weight: null,
+        key: TRL_LEVEL_SCORE_KEY,
+      },
+    ];
+  }
+  if (config.type === "niveles") {
+    return config.variables.map((v) => ({
+      dimension: "Variables",
+      name: v.name,
+      weight: null,
+      key: `variable:${v.name.trim().toLowerCase()}`,
+    }));
+  }
   const entries: RubricScoreSchemaEntry[] = [];
   for (const dim of config.dimensions) {
     for (const sub of dim.subdimensions) {

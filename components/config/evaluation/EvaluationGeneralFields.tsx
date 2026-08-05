@@ -73,7 +73,7 @@ export function EvaluationGeneralFields({
             Dimensiones en paralelo
           </label>
         </>
-      ) : (
+      ) : rubric.type === "niveles" ? (
         <label className="col-span-2 flex items-end gap-2 pb-1.5">
           <input
             type="checkbox"
@@ -82,7 +82,7 @@ export function EvaluationGeneralFields({
           />
           Variables en paralelo
         </label>
-      )}
+      ) : null}
     </div>
   );
 }
