@@ -1,5 +1,7 @@
 "use client";
 
+import { apiFetch } from "@/lib/api-fetch";
+
 import { useState, useEffect } from "react";
 import { knowledgePathsToLabels } from "@/lib/extract-stream";
 import { mergeRubricConfig, buildRubricScoreSchemaFromConfig } from "@/lib/rubric-config";
@@ -25,7 +27,7 @@ export function useEvaluationConfig(activeTypeId: number | null, configOpen: boo
       setScoreSchema([]);
       return;
     }
-    fetch(`/api/config/${activeTypeId}`)
+    apiFetch(`/api/config/${activeTypeId}`)
       .then((r) => r.json())
       .then((data) => {
         const elements = Array.isArray(data.elements) ? data.elements : [];

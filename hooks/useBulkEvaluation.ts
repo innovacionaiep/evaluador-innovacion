@@ -1,5 +1,7 @@
 "use client";
 
+import { apiFetch } from "@/lib/api-fetch";
+
 import { useState, useRef, useCallback } from "react";
 import type { ChatMessage } from "@/components/ChatPanel";
 import type { BulkAgentSlot, BulkAgentSlotStatus } from "@/components/BulkAgentPanel";
@@ -44,7 +46,7 @@ export type BulkProjectRow = {
 };
 
 async function cleanupSession(sessionId: string): Promise<void> {
-  await fetch("/api/session-cleanup", {
+  await apiFetch("/api/session-cleanup", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sessionId }),

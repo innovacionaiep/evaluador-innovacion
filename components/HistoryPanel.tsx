@@ -1,5 +1,7 @@
 "use client";
 
+import { apiFetch } from "@/lib/api-fetch";
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   formatIndicatorScore,
@@ -126,7 +128,7 @@ export default function HistoryPanel({
     setError(null);
     try {
       const params = new URLSearchParams({ limit: "100", type });
-      const res = await fetch(`/api/evaluation-history?${params}`);
+      const res = await apiFetch(`/api/evaluation-history?${params}`);
       const data = await parseResponseJson<{ error?: string } & HistoryListItem[]>(res);
       if (!res.ok) {
         throw new Error(
@@ -183,7 +185,7 @@ export default function HistoryPanel({
     let cancelled = false;
     setDetailLoading(true);
     setShowReport(false);
-    fetch(`/api/evaluation-history/${selectedId}`)
+    apiFetch(`/api/evaluation-history/${selectedId}`)
       .then(async (res) => {
         const data = await parseResponseJson<HistoryDetail & { error?: string }>(res);
         if (!res.ok) throw new Error(data?.error || `Error ${res.status}`);
@@ -246,7 +248,7 @@ export default function HistoryPanel({
     if (!window.confirm("¿Eliminar esta evaluación del historial?")) return;
     setDeleting(true);
     try {
-      const res = await fetch(`/api/evaluation-history/${selectedId}`, {
+      const res = await apiFetch(`/api/evaluation-history/${selectedId}`, {
         method: "DELETE",
       });
       const data = await parseResponseJson<{ error?: string } | null>(res).catch(() => null);
@@ -287,7 +289,7 @@ export default function HistoryPanel({
     setRenaming(true);
     setError(null);
     try {
-      const res = await fetch(`/api/evaluation-history/${id}`, {
+      const res = await apiFetch(`/api/evaluation-history/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectName: nextName }),

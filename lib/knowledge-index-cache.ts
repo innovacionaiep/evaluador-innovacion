@@ -1,3 +1,4 @@
+import { apiFetch } from "@/lib/api-fetch";
 import type { StoredChunk } from "@/lib/chunk-types";
 
 const DB_NAME = "evaluador_knowledge_index";
@@ -104,7 +105,7 @@ async function deleteFromIdb(cacheKeyStr: string): Promise<void> {
 export async function fetchRagStatusClient(
   evaluationTypeId: number
 ): Promise<KnowledgeRagStatusClient> {
-  const res = await fetch(`/api/config/${evaluationTypeId}/rag-status`);
+  const res = await apiFetch(`/api/config/${evaluationTypeId}/rag-status`);
   if (!res.ok) {
     throw new Error("No se pudo obtener el estado del índice RAG");
   }

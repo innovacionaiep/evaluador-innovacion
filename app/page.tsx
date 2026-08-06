@@ -1,5 +1,7 @@
 "use client";
 
+import { apiFetch } from "@/lib/api-fetch";
+
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import Header from "@/components/Header";
 import ChatPanel from "@/components/ChatPanel";
@@ -141,7 +143,7 @@ export default function Home() {
   useEffect(() => {
     let cancelled = false;
     setTypesLoadError(null);
-    fetch("/api/evaluation-types")
+    apiFetch("/api/evaluation-types")
       .then(async (r) => {
         const data = await parseResponseJson<EvaluationType[] | { error?: string }>(r);
         if (cancelled) return;
@@ -367,7 +369,7 @@ export default function Home() {
         onClose={() => setConfigOpen(false)}
         types={evaluationTypes}
         activeId={activeTypeId}
-        onTypesChange={() => fetch("/api/evaluation-types").then((r) => r.json()).then(setEvaluationTypes)}
+        onTypesChange={() => apiFetch("/api/evaluation-types").then((r) => r.json()).then(setEvaluationTypes)}
         onSelectType={setActiveTypeId}
       />
       <HistoryPanel

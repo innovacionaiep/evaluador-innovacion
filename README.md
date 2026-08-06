@@ -17,6 +17,8 @@ Aplicación tipo agente-chat que evalúa proyectos usando documentación y rúbr
    npm install
    ```
 
+   Use **npm** only (this repo keeps a single `package-lock.json`).
+
 2. Copiar `.env.example` a `.env.local` y configurar:
 
    ```
@@ -35,7 +37,17 @@ Aplicación tipo agente-chat que evalúa proyectos usando documentación y rúbr
 
 4. Abrir http://localhost:3000
 
+5. Calidad local:
+
+   ```bash
+   npm test
+   npm run typecheck
+   npm run lint
+   ```
+
 La configuración (tipos de evaluación, rúbrica, modelos LLM) se guarda en **Supabase**. Los documentos de knowledge y el índice RAG viven en **Vercel Blob**. Los archivos de proyecto de cada sesión son temporales (`/tmp`).
+
+En producción, configura `EVALUADOR_API_SECRET` y `NEXT_PUBLIC_EVALUADOR_API_SECRET` (mismo valor) más Vercel Deployment Protection — ver [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## Uso
 

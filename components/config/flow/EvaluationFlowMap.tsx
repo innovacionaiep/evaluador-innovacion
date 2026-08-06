@@ -1,5 +1,7 @@
 "use client";
 
+import { apiFetch } from "@/lib/api-fetch";
+
 import { useCallback, useEffect, useState } from "react";
 import { IGIP_FLOW_STEPS, type FlowConfigActionId, type IgipFlowStep } from "@/lib/eval-flow/igip-flow-definition";
 import { IMET_FLOW_STEPS } from "@/lib/eval-flow/imet-flow-definition";
@@ -69,7 +71,7 @@ export function EvaluationFlowMap({
     }
     setPromptLoading(true);
     setPromptError(null);
-    fetch(`/api/config/${evaluationTypeId}/${meta.apiSegment}`)
+    apiFetch(`/api/config/${evaluationTypeId}/${meta.apiSegment}`)
       .then(async (r) => {
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || "Error al cargar prompts");

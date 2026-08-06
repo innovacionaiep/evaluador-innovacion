@@ -2,6 +2,9 @@
   "name": "evaluador-innovacion",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "dev": "npx next dev",
     "dev:webpack": "npx next dev --webpack",
@@ -9,15 +12,16 @@
     "start": "npx next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test:extract": "npx tsx --test lib/extract-regression.test.ts",
-    "migrate:config": "npx tsx scripts/migrate-config-to-postgres.ts",
-    "backfill:type-configs": "npx tsx scripts/backfill-type-configs.ts",
+    "test": "tsx --test \"lib/**/*.test.ts\"",
+    "test:extract": "tsx --test lib/extract-regression.test.ts",
+    "migrate:config": "tsx scripts/migrate-config-to-postgres.ts",
+    "backfill:type-configs": "tsx scripts/backfill-type-configs.ts",
     "backfill:rag-meta": "node scripts/run-backfill-rag-meta.cjs",
-    "migrate:rubric-report": "npx tsx scripts/migrate-rubric-report-config.ts",
-    "migrate:evaluation-config": "npx tsx scripts/migrate-evaluation-config.ts",
-    "migrate:supabase-copy": "npx tsx scripts/copy-supabase-config.ts",
-    "check:env": "npx tsx scripts/check-cloud-env.ts",
-    "check:supabase": "npx tsx scripts/verify-supabase.ts"
+    "migrate:rubric-report": "tsx scripts/migrate-rubric-report-config.ts",
+    "migrate:evaluation-config": "tsx scripts/migrate-evaluation-config.ts",
+    "migrate:supabase-copy": "tsx scripts/copy-supabase-config.ts",
+    "check:env": "tsx scripts/check-cloud-env.ts",
+    "check:supabase": "tsx scripts/verify-supabase.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.0.0",
@@ -41,6 +45,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
+    "tsx": "^4.23.8",
     "typescript": "^5"
   }
 }

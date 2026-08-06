@@ -1,5 +1,7 @@
 "use client";
 
+import { apiFetch } from "@/lib/api-fetch";
+
 import { useState, useEffect } from "react";
 import {
   mergeBulkEvaluationConfig,
@@ -26,7 +28,7 @@ export default function BulkConfigModal({
     if (!isOpen) return;
     setLoading(true);
     setMessage(null);
-    fetch("/api/bulk-evaluation-config")
+    apiFetch("/api/bulk-evaluation-config")
       .then((r) => r.json())
       .then((data: BulkEvaluationConfig) => {
         setConfig(mergeBulkEvaluationConfig(data));
@@ -39,7 +41,7 @@ export default function BulkConfigModal({
     setSaving(true);
     setMessage(null);
     try {
-      const res = await fetch("/api/bulk-evaluation-config", {
+      const res = await apiFetch("/api/bulk-evaluation-config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config),

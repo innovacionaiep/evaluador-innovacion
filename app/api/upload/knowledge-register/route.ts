@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { useBlobStorage } from "@/lib/blob-storage";
 import { getEvaluationTypeById } from "@/lib/db";
+import { clientErrorMessage, logServerError } from "@/lib/api-errors";
 import { registerKnowledgeUploads, type KnowledgeEntry } from "@/lib/knowledge-upload";
+import { isAllowedKnowledgeUrl } from "@/lib/knowledge-url-guard";
 
 export const maxDuration = 300;
 
@@ -28,6 +30,12 @@ export async function POST(request: Request) {
       if (!entry?.name || !entry?.url) {
         return NextResponse.json({ error: "Cada entrada debe tener name y url" }, { status: 400 });
       }
+      if (!isAllowedKnowledgeUrl(entry.url, evaluationTypeId)) {
+        return NextResponse.json(
+          { error: "URL de knowledge no válida para este tipo de evaluación" },
+          { status: 400 }
+        );
+      }
     }
 
     const type = await getEvaluationTypeById(evaluationTypeId);
@@ -38,6 +46,7 @@ export async function POST(request: Request) {
     const result = await registerKnowledgeUploads(evaluationTypeId, uploaded);
     return NextResponse.json(result);
   } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+    logServerError("knowledge-register", e);
+    return NextResponse.json({ error: clientErrorMessage(e) }, { status: 500 });
   }
 }

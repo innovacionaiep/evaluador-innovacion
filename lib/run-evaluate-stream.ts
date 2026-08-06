@@ -1,3 +1,4 @@
+import { apiFetch } from "@/lib/api-fetch";
 import type { EvaluateStreamEvent } from "@/lib/evaluate-pipeline";
 import type { AgentTraceEntry } from "@/lib/agent-events";
 import {
@@ -89,7 +90,7 @@ async function retryFormatReport(params: {
   subdimensionScores: Record<string, number | null>;
   overallScore: number | null;
 }> {
-  const res = await fetch("/api/format-report", {
+  const res = await apiFetch("/api/format-report", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -170,7 +171,7 @@ export async function runEvaluateStream(params: {
     );
   }
 
-  const res = await fetch("/api/evaluate", {
+  const res = await apiFetch("/api/evaluate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

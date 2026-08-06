@@ -1,5 +1,7 @@
 "use client";
 
+import { apiFetch } from "@/lib/api-fetch";
+
 import { useState, useRef } from "react";
 import type { ProjectStructuredData } from "@/lib/build-context";
 import AgentTrace from "@/components/AgentTrace";
@@ -188,7 +190,7 @@ export default function ChatPanel({
         /* fallback servidor */
       }
 
-      const res = await fetch("/api/chat", {
+      const res = await apiFetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

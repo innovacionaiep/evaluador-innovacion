@@ -22,6 +22,6 @@ describe("evaluate-stream draft vs final", () => {
       content: "borrador",
     };
     state = applyEvaluateStreamEvent(state, draft, false);
-    assert.ok(state.trace.some((t) => /Borrador de evaluación listo/i.test(t.title)));
+    assert.ok(state.trace.some((t) => /Borrador listo/i.test(t.title)));
   });
 });

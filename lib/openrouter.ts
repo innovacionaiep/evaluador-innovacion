@@ -12,6 +12,13 @@ import {
 } from "@/lib/llm-config-server";
 import type { LlmUseCase } from "@/lib/llm-config-types";
 import { EMBEDDING_MAX_INPUT_CHARS } from "@/lib/chunking";
+import {
+  embeddingInputTypeCandidates,
+  isEmbeddingInputTypeError,
+  type EmbeddingInputType,
+} from "@/lib/embedding-input-type";
+
+export type { EmbeddingInputType } from "@/lib/embedding-input-type";
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 /** Lotes pequeños: algunos providers aplican el límite 8192 al batch completo. */
@@ -490,12 +497,6 @@ function clampEmbeddingInput(text: string, maxChars: number): string {
   return trimmed.length > maxChars ? trimmed.slice(0, maxChars) : trimmed;
 }
 
-export type EmbeddingInputType = "search_query" | "search_document";
-
-function isEmbeddingInputTypeError(message: string): boolean {
-  return /input_type/i.test(message) && /asymmetric|required/i.test(message);
-}
-
 /** Generate embeddings for one or more texts (RAG indexing and retrieval). */
 export async function createEmbeddings(
   input: string[],
@@ -513,39 +514,31 @@ export async function createEmbeddings(
   return runWithRetries(
     useCase,
     async (model, apiKey) => {
-      const body: Record<string, unknown> = { model, input, input_type: inputType };
-      const res = await fetch(`${OPENROUTER_BASE}/embeddings`, {
-        method: "POST",
-        headers: openRouterHeaders(apiKey),
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const errBody = await res.text();
-        // Algunos providers solo aceptan query/passage; reintentar con alias comunes.
-        if (isEmbeddingInputTypeError(errBody) || /input_type/i.test(errBody)) {
-          const alt =
-            inputType === "search_query"
-              ? (["query", "search_query"] as const)
-              : (["passage", "document", "search_document"] as const);
-          for (const altType of alt) {
-            if (altType === inputType) continue;
-            const retry = await fetch(`${OPENROUTER_BASE}/embeddings`, {
-              method: "POST",
-              headers: openRouterHeaders(apiKey),
-              body: JSON.stringify({ model, input, input_type: altType }),
-            });
-            if (retry.ok) {
-              const data = (await retry.json()) as EmbeddingResponse;
-              const rows = (data.data ?? []).slice().sort((a, b) => a.index - b.index);
-              return rows.map((row) => row.embedding ?? []);
-            }
-          }
+      const candidates = embeddingInputTypeCandidates(inputType, model);
+      let lastErr = "";
+
+      for (let i = 0; i < candidates.length; i++) {
+        const type = candidates[i]!;
+        const res = await fetch(`${OPENROUTER_BASE}/embeddings`, {
+          method: "POST",
+          headers: openRouterHeaders(apiKey),
+          body: JSON.stringify({ model, input, input_type: type }),
+        });
+        if (res.ok) {
+          const data = (await res.json()) as EmbeddingResponse;
+          const rows = (data.data ?? []).slice().sort((a, b) => a.index - b.index);
+          return rows.map((row) => row.embedding ?? []);
         }
-        throw new Error(`${res.status} ${errBody}`);
+
+        const errBody = await res.text();
+        lastErr = `${res.status} ${errBody}`;
+        const canTryAlias =
+          i < candidates.length - 1 && isEmbeddingInputTypeError(errBody);
+        // Si el alias falla por rate limit u otro motivo, propagar ese error (no el 400 viejo).
+        if (!canTryAlias) throw new Error(lastErr);
       }
-      const data = (await res.json()) as EmbeddingResponse;
-      const rows = (data.data ?? []).slice().sort((a, b) => a.index - b.index);
-      return rows.map((row) => row.embedding ?? []);
+
+      throw new Error(lastErr || "Error al generar embeddings");
     },
     { modelOverride: options?.model }
   );

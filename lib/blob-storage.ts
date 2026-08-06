@@ -36,9 +36,9 @@ export function canPresignedBlobUpload(): boolean {
   );
 }
 
-/** Cualquier subida cliente (>4,5 MB) disponible. */
+/** Cualquier subida cliente (>4,5 MB) disponible (requiere BLOB_READ_WRITE_TOKEN). */
 export function canClientBlobUpload(): boolean {
-  return canLegacyClientBlobUpload() || canPresignedBlobUpload();
+  return canLegacyClientBlobUpload();
 }
 
 export function knowledgeBlobPrefix(evaluationTypeId: number): string {

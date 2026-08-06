@@ -1,0 +1,9 @@
+# Gentleman Guardian Angel Configuration
+# https://github.com/Gentleman-Programming/gentleman-guardian-angel
+
+# AI provider for code review (pick one installed locally):
+# claude | gemini | codex | opencode | ollama:<model> | github:<model>
+PROVIDER=opencode
+
+# Optional: path to project rules (default AGENTS.md)
+# AGENTS_FILE=AGENTS.md

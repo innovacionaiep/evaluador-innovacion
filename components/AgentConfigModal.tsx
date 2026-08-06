@@ -1,5 +1,7 @@
 "use client";
 
+import { apiFetch } from "@/lib/api-fetch";
+
 import { useState, useEffect, useMemo } from "react";
 import type { ChatAgentConfig } from "@/lib/chat-agent-config";
 import { defaultChatAgentConfig } from "@/lib/chat-agent-config";
@@ -132,8 +134,8 @@ export default function AgentConfigModal({
     setMessage(null);
     setActiveId("overview");
     Promise.all([
-      fetch("/api/chat-agent-config").then((r) => r.json()),
-      fetch("/api/agent-tools").then(async (r) => {
+      apiFetch("/api/chat-agent-config").then((r) => r.json()),
+      apiFetch("/api/agent-tools").then(async (r) => {
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || "Error tools");
         return data as AgentToolsCatalogResponse;
@@ -166,7 +168,7 @@ export default function AgentConfigModal({
     setSaving(true);
     setMessage(null);
     try {
-      const res = await fetch("/api/chat-agent-config", {
+      const res = await apiFetch("/api/chat-agent-config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config),

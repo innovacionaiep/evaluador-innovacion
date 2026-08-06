@@ -1,3 +1,4 @@
+import { apiFetch } from "@/lib/api-fetch";
 import {
   defaultBulkEvaluationConfig,
   mergeBulkEvaluationConfig,
@@ -13,7 +14,7 @@ export async function fetchBulkEvaluationConfig(
   if (!force && cachedConfig) return cachedConfig;
   if (!force && cachePromise) return cachePromise;
 
-  cachePromise = fetch("/api/bulk-evaluation-config")
+  cachePromise = apiFetch("/api/bulk-evaluation-config")
     .then((r) => {
       if (!r.ok) throw new Error("No se pudo cargar configuración masiva");
       return r.json();

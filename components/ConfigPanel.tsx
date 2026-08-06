@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { upload, uploadPresigned } from "@vercel/blob/client";
+import { upload } from "@vercel/blob/client";
+import { apiFetch, withApiAuthHeaders } from "@/lib/api-fetch";
 import LlmConfigModal from "@/components/LlmConfigModal";
 import AgentConfigModal from "@/components/AgentConfigModal";
 import BulkConfigModal from "@/components/BulkConfigModal";
@@ -131,7 +132,7 @@ export default function ConfigPanel({
 
   const loadBlobCatalog = useCallback(() => {
     setBlobCatalogLoading(true);
-    fetch("/api/upload/blob-list")
+    apiFetch("/api/upload/blob-list")
       .then((r) => r.json())
       .then((data) => {
         setBlobStorageEnabled(!!data.blobStorage);
@@ -153,7 +154,7 @@ export default function ConfigPanel({
 
   useEffect(() => {
     if (!isOpen) return;
-    fetch("/api/upload/capabilities")
+    apiFetch("/api/upload/capabilities")
       .then((r) => r.json())
       .then((data) => setBlobStorageEnabled(!!data?.blobStorage))
       .catch(() => setBlobStorageEnabled(false));
@@ -166,7 +167,7 @@ export default function ConfigPanel({
       return;
     }
     if (options?.force) ragStatusCacheRef.current.delete(typeId);
-    fetch(`/api/config/${typeId}/rag-status`)
+    apiFetch(`/api/config/${typeId}/rag-status`)
       .then((r) => r.json())
       .then((data) => {
         if (typeof data?.chunkCount !== "number") return;
@@ -232,7 +233,7 @@ export default function ConfigPanel({
     setRagStatus(cached ?? null);
     setKnowledgeIndexStatus(null);
     setLoading(true);
-    fetch(`/api/config/${selectedTypeId}`)
+    apiFetch(`/api/config/${selectedTypeId}`)
       .then((r) => r.json())
       .then((data) => {
         const elements = Array.isArray(data.elements)
@@ -287,7 +288,7 @@ export default function ConfigPanel({
     if (!selectedTypeId) return;
     setSaving(true);
     try {
-      const res = await fetch(`/api/config/${selectedTypeId}`, {
+      const res = await apiFetch(`/api/config/${selectedTypeId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -324,7 +325,7 @@ export default function ConfigPanel({
     setIndexingKnowledge(true);
     setKnowledgeIndexStatus("Subiendo e indexando documento…");
     try {
-      const capsRes = await fetch("/api/upload/capabilities");
+      const capsRes = await apiFetch("/api/upload/capabilities");
       const caps = await capsRes.json().catch(() => ({}));
       const needsClientBlob = Array.from(files).some(
         (f) => f.size >= (caps.maxServerUploadBytes ?? MAX_VERCEL_SERVER_UPLOAD_BYTES)
@@ -332,16 +333,15 @@ export default function ConfigPanel({
       const useClientBlob =
         caps.blobStorage === true &&
         needsClientBlob &&
-        (caps.clientBlobUpload === true || caps.presignedClientUpload === true);
+        (caps.legacyClientUpload === true || caps.clientBlobUpload === true);
 
       if (needsClientBlob && caps.blobStorage && !useClientBlob) {
         throw new Error(
-          "El archivo supera 4,5 MB. Conecta Vercel Blob al proyecto (BLOB_STORE_ID + BLOB_WEBHOOK_PUBLIC_KEY) y redeploy."
+          "El archivo supera 4,5 MB. Añade BLOB_READ_WRITE_TOKEN en .env.local (o vercel env pull) y redeploy."
         );
       }
 
       if (useClientBlob) {
-        const usePresigned = caps.presignedClientUpload === true;
         const uploaded: { name: string; url: string }[] = [];
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
@@ -356,16 +356,15 @@ export default function ConfigPanel({
               evaluationTypeId: selectedTypeId,
             }),
             multipart: file.size > 5 * 1024 * 1024,
+            headers: Object.fromEntries(withApiAuthHeaders()),
           };
-          const blob = usePresigned
-            ? await uploadPresigned(pathname, file, uploadOpts)
-            : await upload(pathname, file, uploadOpts);
+          const blob = await upload(pathname, file, uploadOpts);
           uploaded.push({ name: filename, url: blob.url });
         }
         if (uploaded.length === 0) {
           throw new Error("Ningún archivo válido para subir");
         }
-        const res = await fetch("/api/upload/knowledge-register", {
+        const res = await apiFetch("/api/upload/knowledge-register", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ evaluationTypeId: selectedTypeId, uploaded }),
@@ -386,7 +385,7 @@ export default function ConfigPanel({
       form.set("kind", "knowledge");
       form.set("evaluationTypeId", String(selectedTypeId));
       for (let i = 0; i < files.length; i++) form.append("files", files[i]);
-      const res = await fetch("/api/upload", { method: "POST", body: form });
+      const res = await apiFetch("/api/upload", { method: "POST", body: form });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data?.error || "Error al subir");
@@ -413,7 +412,7 @@ export default function ConfigPanel({
     setIndexingKnowledge(true);
     setKnowledgeIndexStatus("Eliminando e actualizando índice RAG…");
     try {
-      const res = await fetch(`/api/config/${selectedTypeId}`, {
+      const res = await apiFetch(`/api/config/${selectedTypeId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ knowledge_paths: newPaths }),
@@ -439,7 +438,7 @@ export default function ConfigPanel({
     setIndexingKnowledge(true);
     setKnowledgeIndexStatus("Vinculando documentos del almacenamiento…");
     try {
-      const res = await fetch("/api/upload/knowledge-link", {
+      const res = await apiFetch("/api/upload/knowledge-link", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ evaluationTypeId: selectedTypeId, blobs }),
@@ -491,7 +490,7 @@ export default function ConfigPanel({
     } catch (err) {
       // Si el navegador corta la petición larga pero el servidor ya terminó, el índice puede existir.
       try {
-        const statusRes = await fetch(`/api/config/${typeId}/rag-status`);
+        const statusRes = await apiFetch(`/api/config/${typeId}/rag-status`);
         const status = await statusRes.json().catch(() => null);
         if (status?.hasIndex && typeof status.chunkCount === "number" && status.chunkCount > 0) {
           setKnowledgeIndexStatus(

@@ -1,3 +1,4 @@
+import { apiFetch } from "@/lib/api-fetch";
 import type { AgentTraceEntry } from "@/lib/agent-events";
 import {
   applyExtractStreamEvent,
@@ -32,13 +33,13 @@ export async function runExtractStream(params: {
     form.set("skipReindex", "false");
     form.set("replace", "true");
     form.append("files", params.projectFile);
-    res = await fetch("/api/project-extract", {
+    res = await apiFetch("/api/project-extract", {
       method: "POST",
       body: form,
       signal: params.signal,
     });
   } else {
-    res = await fetch("/api/project-extract", {
+    res = await apiFetch("/api/project-extract", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

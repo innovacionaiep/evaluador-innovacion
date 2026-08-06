@@ -21,14 +21,14 @@ describe("format-report-sections", () => {
   const fmt = defaultReportFormatPonderaciones(rubric);
   fmt.subdimensionEvalLimits = { minChars: 1400, maxChars: 1500 };
 
-  it("buildSectionFormatSystemPrompt incluye min y max de la sección", () => {
+  it("buildSectionFormatSystemPrompt incluye objetivo de extensión y Nota", () => {
     const sections = expandReportSections(rubric, fmt);
     const sub = sections.find((s) => s.kind === "subdimension_eval");
     assert.ok(sub);
     const prompt = buildSectionFormatSystemPrompt(sub!, rubric);
-    assert.match(prompt, /1400/);
-    assert.match(prompt, /1500/);
-    assert.match(prompt, /PROHIBIDO resumir por debajo del mínimo/i);
+    // Soft length target is the average of min/max (1400–1500 → ~1450)
+    assert.match(prompt, /1450/);
+    assert.match(prompt, /sin necesidad de contar exactamente/i);
     assert.match(prompt, /Preserva la línea exacta «Nota: N»/i);
   });
 
@@ -148,14 +148,13 @@ Más texto.`;
     assert.equal(subIds[0], subdimensionEvalId(rubric.dimensions[0].subdimensions[0].id));
   });
 
-  it("dimension overview usa maxChars como objetivo suave", () => {
+  it("dimension overview usa promedio min/max como objetivo suave", () => {
     const sections = expandReportSections(rubric, fmt);
     const overview = sections.find((s) => s.kind === "dimension_overview");
     assert.ok(overview);
     const prompt = buildSectionFormatSystemPrompt(overview!, rubric);
-    assert.match(prompt, /Mínimo obligatorio/i);
-    assert.match(prompt, /Objetivo aproximado/i);
-    assert.match(prompt, /350|700/);
+    assert.match(prompt, /sin necesidad de contar exactamente/i);
+    assert.match(prompt, /525|350|700/);
   });
 
   it("isLightTruncationOnly detecta fragmento corto final con minChars cumplido", () => {

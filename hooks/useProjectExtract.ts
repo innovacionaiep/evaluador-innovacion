@@ -1,5 +1,7 @@
 "use client";
 
+import { apiFetch } from "@/lib/api-fetch";
+
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { ChatMessage } from "@/components/ChatPanel";
 import type { AgentTraceEntry } from "@/lib/agent-events";
@@ -211,7 +213,7 @@ export function useProjectExtract(
         form.append("files", file);
       }
 
-      fetch("/api/project-extract", {
+      apiFetch("/api/project-extract", {
         method: "POST",
         body: form,
         signal: currentController.signal,

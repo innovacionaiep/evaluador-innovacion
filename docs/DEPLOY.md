@@ -58,6 +58,8 @@ Si la contraseña contiene `&`, codifícala como `%26` en la URL (ej. `&WC&…` 
 | `BLOB_WEBHOOK_PUBLIC_KEY` | Sí si no hay `BLOB_READ_WRITE_TOKEN` (subida >4,5 MB) |
 | `OPENROUTER_API_KEY` | Sí |
 | `NEXT_PUBLIC_APP_URL` | Recomendada |
+| `EVALUADOR_API_SECRET` | Sí en producción (protege `/api/*`) |
+| `NEXT_PUBLIC_EVALUADOR_API_SECRET` | Sí en producción (mismo valor; UI) |
 
 La API key de OpenRouter solo se configura con `OPENROUTER_API_KEY`. Los modelos por función se guardan desde la UI «Configurar LLM» en Supabase. **Todos los campos son obligatorios**; no hay modelos por defecto en código.
 
@@ -67,7 +69,21 @@ Evaluación y extracción usan hasta 5 minutos (`maxDuration = 300`). En plan **
 
 ## Acceso
 
-Comparte la URL solo con el equipo. No hay login en la app.
+Esta app es una herramienta de equipo (sin login de usuarios).
+
+**Producción (obligatorio):**
+
+1. Activa **Vercel Deployment Protection** (Password o Vercel Authentication) en el proyecto.
+2. Define el mismo secreto en:
+   - `EVALUADOR_API_SECRET` (servidor / middleware)
+   - `NEXT_PUBLIC_EVALUADOR_API_SECRET` (cliente; header `Authorization: Bearer` / `X-Evaluador-Secret`)
+
+Sin el secreto, las rutas `/api/*` quedan abiertas (solo adecuado en desarrollo local).
+
+| Variable | Obligatoria en prod |
+|----------|---------------------|
+| `EVALUADOR_API_SECRET` | Sí |
+| `NEXT_PUBLIC_EVALUADOR_API_SECRET` | Sí (mismo valor) |
 
 ## Migración desde SQLite local (legacy)
 

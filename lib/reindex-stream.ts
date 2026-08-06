@@ -1,3 +1,4 @@
+import { apiFetch } from "@/lib/api-fetch";
 /** Client helper: consume NDJSON progress from POST /api/config/:id/reindex */
 
 export type ReindexProgressEvent = {
@@ -31,7 +32,7 @@ export async function runReindexStream(params: {
   onProgress?: (message: string, event: ReindexProgressEvent) => void;
   signal?: AbortSignal;
 }): Promise<{ chunkCount: number }> {
-  const res = await fetch(`/api/config/${params.evaluationTypeId}/reindex`, {
+  const res = await apiFetch(`/api/config/${params.evaluationTypeId}/reindex`, {
     method: "POST",
     signal: params.signal,
   });

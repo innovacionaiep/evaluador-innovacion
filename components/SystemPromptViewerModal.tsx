@@ -1,5 +1,7 @@
 "use client";
 
+import { apiFetch } from "@/lib/api-fetch";
+
 import { useEffect, useMemo, useState } from "react";
 import type {
   SystemPromptCategory,
@@ -86,7 +88,7 @@ export default function SystemPromptViewerModal({
     setError(null);
     setQuery("");
     setActiveCategoryId(null);
-    fetch("/api/system-prompts")
+    apiFetch("/api/system-prompts")
       .then(async (r) => {
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || "Error al cargar");

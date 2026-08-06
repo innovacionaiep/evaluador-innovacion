@@ -1,5 +1,7 @@
 "use client";
 
+import { apiFetch } from "@/lib/api-fetch";
+
 import { useState, useEffect } from "react";
 import {
   emptyLlmModels,
@@ -37,7 +39,7 @@ export default function LlmConfigModal({
     if (!isOpen) return;
     setLoading(true);
     setMessage(null);
-    fetch("/api/llm-config")
+    apiFetch("/api/llm-config")
       .then((r) => r.json())
       .then((data: LlmConfigResponse) => {
         if (data.models) setModels({ ...emptyLlmModels(), ...data.models });
@@ -56,7 +58,7 @@ export default function LlmConfigModal({
     setSaving(true);
     setMessage(null);
     try {
-      const res = await fetch("/api/llm-config", {
+      const res = await apiFetch("/api/llm-config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ models, params }),

@@ -1,3 +1,4 @@
+import { apiFetch } from "@/lib/api-fetch";
 import type { RetrievedChunk, StoredChunk } from "@/lib/chunk-types";
 import {
   filterChunksByIncludeDocNames,
@@ -10,7 +11,7 @@ import {
 export type ClientHybridRetrieveOptions = HybridRetrieveOptions;
 
 async function fetchEmbeddings(texts: string[]): Promise<number[][]> {
-  const res = await fetch("/api/embed-queries", {
+  const res = await apiFetch("/api/embed-queries", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ texts }),

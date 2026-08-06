@@ -103,6 +103,10 @@ export default function Header({
             </div>
           )}
         </div>
+
+        <span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
+          Versión 1.1
+        </span>
       </div>
 
       <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center rounded-lg border border-gray-200 bg-white p-0.5 dark:border-gray-600 dark:bg-[#1e1e1e]">

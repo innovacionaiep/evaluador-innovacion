@@ -1,3 +1,4 @@
+import { apiFetch } from "@/lib/api-fetch";
 import { fileBaseName } from "@/lib/evaluation-mode";
 import type { RubricScoreSchemaEntry } from "@/lib/evaluation-scores";
 import { parseResponseJson } from "@/lib/fetch-json";
@@ -30,7 +31,7 @@ export function extractProjectNameFromElements(
 export async function saveEvaluationToHistory(
   payload: SaveEvaluationHistoryPayload
 ): Promise<void> {
-  const res = await fetch("/api/evaluation-history", {
+  const res = await apiFetch("/api/evaluation-history", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

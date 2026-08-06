@@ -20,16 +20,39 @@ const ALLOWED_EXT = new Set(getSupportedExtensions());
 
 export type KnowledgeClientPayload = { kind?: string; evaluationTypeId?: number };
 
+/** Pure path checks (no DB). Rejects traversal and wrong prefixes. */
+export function assertKnowledgeUploadPathname(pathname: string, typeId: number): void {
+  const slashNormalized = pathname.replace(/\\/g, "/");
+  const norm = path.posix.normalize(slashNormalized);
+  const expectedPrefix = `knowledge/${typeId}/`;
+
+  if (norm.includes("..") || !norm.startsWith(expectedPrefix)) {
+    throw new Error("Ruta de subida inválida");
+  }
+  // Reject paths that normalize away from the declared pathname (traversal tricks)
+  if (slashNormalized.includes("..")) {
+    throw new Error("Ruta de subida inválida");
+  }
+
+  const ext = path.extname(norm).toLowerCase();
+  if (!ALLOWED_EXT.has(ext)) {
+    throw new Error("Tipo de archivo no permitido");
+  }
+}
+
+export function parseKnowledgeClientPayload(clientPayload: string | null): KnowledgeClientPayload {
+  try {
+    return JSON.parse(clientPayload ?? "{}") as KnowledgeClientPayload;
+  } catch {
+    throw new Error("Payload de subida inválido");
+  }
+}
+
 export async function validateKnowledgeUploadPath(
   pathname: string,
   clientPayload: string | null
 ): Promise<{ typeId: number; tokenPayload: string | null }> {
-  let payload: KnowledgeClientPayload = {};
-  try {
-    payload = JSON.parse(clientPayload ?? "{}") as KnowledgeClientPayload;
-  } catch {
-    throw new Error("Payload de subida inválido");
-  }
+  const payload = parseKnowledgeClientPayload(clientPayload);
 
   if (payload.kind !== "knowledge" || !Number.isInteger(payload.evaluationTypeId)) {
     throw new Error("evaluationTypeId requerido para subir knowledge");
@@ -39,15 +62,7 @@ export async function validateKnowledgeUploadPath(
   const type = await getEvaluationTypeById(typeId);
   if (!type) throw new Error("Tipo de evaluación no encontrado");
 
-  const expectedPrefix = `knowledge/${typeId}/`;
-  if (!pathname.startsWith(expectedPrefix)) {
-    throw new Error("Ruta de subida inválida");
-  }
-
-  const ext = path.extname(pathname).toLowerCase();
-  if (!ALLOWED_EXT.has(ext)) {
-    throw new Error("Tipo de archivo no permitido");
-  }
+  assertKnowledgeUploadPathname(pathname, typeId);
 
   return { typeId, tokenPayload: clientPayload };
 }

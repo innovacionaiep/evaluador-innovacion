@@ -1,3 +1,4 @@
+import { apiFetch } from "@/lib/api-fetch";
 import type { RetrievedChunk, StoredChunk } from "@/lib/chunk-types";
 import { clientHybridRetrieve } from "@/lib/client-rag";
 import { buildSubdimensionKnowledgeQuery } from "@/lib/evaluate-rag-query";
@@ -31,7 +32,7 @@ export type EvaluatePlanResponse = {
 };
 
 export async function fetchEvaluatePlan(evaluationTypeId: number): Promise<EvaluatePlanResponse> {
-  const res = await fetch(`/api/config/${evaluationTypeId}/evaluate-plan`);
+  const res = await apiFetch(`/api/config/${evaluationTypeId}/evaluate-plan`);
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { error?: string }).error || "No se pudo cargar el plan de evaluación");
