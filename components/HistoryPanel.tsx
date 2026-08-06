@@ -100,6 +100,9 @@ export default function HistoryPanel({
     resolveInitialFilter(initialTypeName)
   );
   const [items, setItems] = useState<HistoryListItem[]>([]);
+  const [projectSearch, setProjectSearch] = useState("");
+  const [bulkSelectMode, setBulkSelectMode] = useState(false);
+  const [checkedIds, setCheckedIds] = useState<Set<number>>(() => new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -113,8 +116,32 @@ export default function HistoryPanel({
   const [renaming, setRenaming] = useState(false);
   const [excelBusy, setExcelBusy] = useState(false);
 
+  const filteredItems = useMemo(() => {
+    const q = projectSearch.trim().toLocaleLowerCase("es");
+    if (!q) return items;
+    return items.filter((item) =>
+      item.project_name.toLocaleLowerCase("es").includes(q)
+    );
+  }, [items, projectSearch]);
+
+  const checkedCount = useMemo(() => {
+    let n = 0;
+    for (const item of filteredItems) {
+      if (checkedIds.has(item.id)) n += 1;
+    }
+    return n;
+  }, [filteredItems, checkedIds]);
+
+  const allFilteredChecked =
+    filteredItems.length > 0 && checkedCount === filteredItems.length;
+
   const tableSchema = useMemo(() => unionScoreSchema(items), [items]);
   const hideIndicator = isTrl(typeFilter);
+
+  const clearBulkSelection = useCallback(() => {
+    setBulkSelectMode(false);
+    setCheckedIds(new Set());
+  }, []);
 
   const indicatorLabel = useMemo(() => {
     if (hideIndicator) return "";
@@ -159,16 +186,22 @@ export default function HistoryPanel({
       setError(null);
       setEditingId(null);
       setDraftName("");
+      setProjectSearch("");
+      clearBulkSelection();
       return;
     }
     const next = resolveInitialFilter(initialTypeName);
     setTypeFilter(next);
+    setProjectSearch("");
+    clearBulkSelection();
     void loadList(next);
-  }, [isOpen, initialTypeName, loadList]);
+  }, [isOpen, initialTypeName, loadList, clearBulkSelection]);
 
   const selectTypeFilter = (key: FixedEvalTypeKey) => {
     if (key === typeFilter) return;
     setTypeFilter(key);
+    setProjectSearch("");
+    clearBulkSelection();
     setSelectedId(null);
     setDetail(null);
     setShowReport(false);
@@ -229,13 +262,18 @@ export default function HistoryPanel({
   };
 
   const handleDownloadExcel = async () => {
-    if (items.length === 0) return;
+    if (filteredItems.length === 0) return;
     setExcelBusy(true);
     setError(null);
     try {
-      await exportHistoryExcel(items, tableSchema, indicatorLabel || `Indicador ${typeFilter}`, {
-        includeIndicator: !hideIndicator,
-      });
+      await exportHistoryExcel(
+        filteredItems,
+        tableSchema,
+        indicatorLabel || `Indicador ${typeFilter}`,
+        {
+          includeIndicator: !hideIndicator,
+        }
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -256,9 +294,104 @@ export default function HistoryPanel({
       setSelectedId(null);
       setDetail(null);
       setEditingId(null);
+      setCheckedIds((prev) => {
+        if (!prev.has(selectedId)) return prev;
+        const next = new Set(prev);
+        next.delete(selectedId);
+        return next;
+      });
       await loadList(typeFilter);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const toggleChecked = (id: number) => {
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAllFiltered = () => {
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (allFilteredChecked) {
+        for (const item of filteredItems) next.delete(item.id);
+      } else {
+        for (const item of filteredItems) next.add(item.id);
+      }
+      return next;
+    });
+  };
+
+  const handleBulkDelete = async () => {
+    const ids = filteredItems
+      .filter((item) => checkedIds.has(item.id))
+      .map((item) => item.id);
+    if (ids.length === 0) return;
+    const label =
+      ids.length === 1
+        ? "¿Eliminar 1 evaluación del historial?"
+        : `¿Eliminar ${ids.length} evaluaciones del historial?`;
+    if (!window.confirm(label)) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      const results = await Promise.allSettled(
+        ids.map(async (id) => {
+          const res = await apiFetch(`/api/evaluation-history/${id}`, {
+            method: "DELETE",
+          });
+          const data = await parseResponseJson<{ error?: string } | null>(res).catch(
+            () => null
+          );
+          if (!res.ok) {
+            throw new Error(data?.error || `Error ${res.status} al eliminar #${id}`);
+          }
+          return id;
+        })
+      );
+      const deleted = new Set<number>();
+      const failures: string[] = [];
+      for (let i = 0; i < results.length; i++) {
+        const result = results[i];
+        if (result.status === "fulfilled") deleted.add(result.value);
+        else {
+          const reason =
+            result.reason instanceof Error
+              ? result.reason.message
+              : String(result.reason);
+          failures.push(reason);
+        }
+      }
+      if (selectedId != null && deleted.has(selectedId)) {
+        setSelectedId(null);
+        setDetail(null);
+      }
+      setEditingId(null);
+      if (failures.length === 0) {
+        clearBulkSelection();
+      } else {
+        setCheckedIds((prev) => {
+          const next = new Set(prev);
+          for (const id of deleted) next.delete(id);
+          return next;
+        });
+        setError(
+          deleted.size > 0
+            ? `Se eliminaron ${deleted.size}, pero fallaron ${failures.length}: ${failures[0]}`
+            : failures[0] ?? "No se pudieron eliminar las evaluaciones"
+        );
+      }
+      await loadList(typeFilter);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      await loadList(typeFilter);
     } finally {
       setDeleting(false);
     }
@@ -358,7 +491,7 @@ export default function HistoryPanel({
             <button
               type="button"
               onClick={() => void handleDownloadExcel()}
-              disabled={excelBusy || loading || items.length === 0}
+              disabled={excelBusy || loading || filteredItems.length === 0}
               className="rounded border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-500 dark:text-gray-100 dark:hover:bg-white/10"
             >
               {excelBusy ? "Generando…" : "Descargar Excel"}
@@ -382,8 +515,67 @@ export default function HistoryPanel({
         <div className="flex min-h-0 flex-1">
           {/* Tabla de selección (estilo evaluación masiva) */}
           <div className="flex min-w-0 flex-1 flex-col border-r border-gray-200 dark:border-gray-600">
-            <div className="shrink-0 border-b border-gray-200 px-4 py-2 text-xs font-medium text-gray-500 dark:border-gray-600 dark:text-gray-400">
-              Historial {typeFilter} — haz clic en una fila para ver el detalle
+            <div className="shrink-0 space-y-2 border-b border-gray-200 px-4 py-2 dark:border-gray-600">
+              <div className="text-xs font-medium text-gray-500 dark:text-gray-400">
+                {bulkSelectMode
+                  ? `Historial ${typeFilter} — marca las filas a eliminar`
+                  : `Historial ${typeFilter} — haz clic en una fila para ver el detalle`}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="search"
+                  value={projectSearch}
+                  onChange={(e) => setProjectSearch(e.target.value)}
+                  placeholder="Buscar por nombre de proyecto…"
+                  aria-label="Buscar por nombre de proyecto"
+                  disabled={loading || items.length === 0}
+                  className="min-w-[200px] flex-1 rounded border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 outline-none focus:border-emerald-500 disabled:opacity-50 dark:border-gray-500 dark:bg-[#1e1e1e] dark:text-gray-100 dark:focus:border-emerald-500"
+                />
+                {!loading && items.length > 0 && projectSearch.trim() && (
+                  <span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
+                    {filteredItems.length} / {items.length}
+                  </span>
+                )}
+                {!bulkSelectMode ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBulkSelectMode(true);
+                      setCheckedIds(new Set());
+                      setEditingId(null);
+                    }}
+                    disabled={loading || filteredItems.length === 0 || deleting}
+                    className="shrink-0 rounded border border-white bg-gray-600 px-3 py-1.5 text-sm font-medium text-white transition hover:border-red-600 hover:bg-red-600 disabled:opacity-50 dark:bg-gray-500 dark:hover:border-red-500 dark:hover:bg-red-600"
+                  >
+                    Eliminar masivo
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      aria-pressed="true"
+                      onClick={clearBulkSelection}
+                      disabled={deleting}
+                      title="Salir del modo eliminar masivo"
+                      className="shrink-0 rounded border border-red-600 bg-red-600 px-3 py-1.5 text-sm font-medium text-white transition hover:border-red-700 hover:bg-red-700 disabled:opacity-50"
+                    >
+                      Eliminar masivo
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleBulkDelete()}
+                      disabled={deleting || checkedCount === 0}
+                      className="shrink-0 rounded border border-white bg-gray-600 px-3 py-1.5 text-sm font-medium text-white transition hover:border-red-600 hover:bg-red-600 disabled:opacity-50 dark:bg-gray-500 dark:hover:border-red-500 dark:hover:bg-red-600"
+                    >
+                      {deleting
+                        ? "Eliminando…"
+                        : checkedCount === 0
+                          ? "Eliminar seleccionados"
+                          : `Eliminar seleccionados (${checkedCount})`}
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-2">
               {loading && (
@@ -394,13 +586,39 @@ export default function HistoryPanel({
                   Aún no hay evaluaciones {typeFilter} en el historial.
                 </p>
               )}
-              {!loading && items.length > 0 && (
+              {!loading && items.length > 0 && filteredItems.length === 0 && (
+                <p className="p-4 text-sm text-gray-500 dark:text-gray-400">
+                  No hay proyectos que coincidan con «{projectSearch.trim()}».
+                </p>
+              )}
+              {!loading && filteredItems.length > 0 && (
                 <table
                   className="border-collapse text-sm"
                   style={{ tableLayout: "fixed", minWidth: "100%" }}
                 >
                   <thead className="sticky top-0 z-20 bg-gray-50 dark:bg-[#2d2d2d]">
                     <tr>
+                      {bulkSelectMode && (
+                        <th
+                          className={`${CELL_BORDER} bg-gray-50 px-2 py-2 text-center dark:bg-[#2d2d2d]`}
+                          style={{ width: 40 }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={allFilteredChecked}
+                            ref={(el) => {
+                              if (el) {
+                                el.indeterminate =
+                                  checkedCount > 0 && !allFilteredChecked;
+                              }
+                            }}
+                            onChange={toggleAllFiltered}
+                            disabled={deleting}
+                            aria-label="Seleccionar todas las filas visibles"
+                            className="h-3.5 w-3.5 accent-emerald-600"
+                          />
+                        </th>
+                      )}
                       <th
                         className={`${CELL_BORDER} bg-gray-50 px-2 py-2 text-left text-xs font-semibold text-gray-800 dark:bg-[#2d2d2d] dark:text-gray-100`}
                         style={{ width: 64 }}
@@ -440,26 +658,54 @@ export default function HistoryPanel({
                     </tr>
                   </thead>
                   <tbody>
-                    {items.map((item) => {
+                    {filteredItems.map((item) => {
                       const selected = item.id === selectedId;
+                      const checked = checkedIds.has(item.id);
                       return (
                         <tr
                           key={item.id}
                           role="button"
                           tabIndex={0}
-                          onClick={() => setSelectedId(item.id)}
+                          onClick={() => {
+                            if (bulkSelectMode) {
+                              if (!deleting) toggleChecked(item.id);
+                              return;
+                            }
+                            setSelectedId(item.id);
+                          }}
                           onKeyDown={(e) => {
                             if (e.key === "Enter" || e.key === " ") {
                               e.preventDefault();
+                              if (bulkSelectMode) {
+                                if (!deleting) toggleChecked(item.id);
+                                return;
+                              }
                               setSelectedId(item.id);
                             }
                           }}
                           className={`cursor-pointer transition ${
-                            selected
-                              ? "bg-emerald-50 dark:bg-emerald-950/40"
-                              : "hover:bg-gray-50 dark:hover:bg-white/5"
+                            bulkSelectMode && checked
+                              ? "bg-red-50 dark:bg-red-950/30"
+                              : selected
+                                ? "bg-emerald-50 dark:bg-emerald-950/40"
+                                : "hover:bg-gray-50 dark:hover:bg-white/5"
                           }`}
                         >
+                          {bulkSelectMode && (
+                            <td
+                              className={`${CELL_BORDER} px-2 py-2 text-center align-top`}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                disabled={deleting}
+                                onChange={() => toggleChecked(item.id)}
+                                aria-label={`Seleccionar evaluación ${item.id}`}
+                                className="h-3.5 w-3.5 accent-emerald-600"
+                              />
+                            </td>
+                          )}
                           <td
                             className={`${CELL_BORDER} px-2 py-2 align-top text-xs font-medium text-gray-700 dark:text-gray-300`}
                           >
